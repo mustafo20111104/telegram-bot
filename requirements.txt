@@ -1,3 +1,10 @@
-python-telegram-bot
-yt-dlp
-requests
+[builds]
+  [builds.python]
+    id = "python-3.11"
+
+[pip]
+  pythonVersion = "3.11"
+  packages = ["python-telegram-bot==20.7", "yt-dlp==2024.8.6", "requests==2.32.3", "aiohttp==3.9.5"]
+
+[run]
+  command = "python main.py"
