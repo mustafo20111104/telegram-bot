@@ -539,7 +539,15 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+   app = (
+    ApplicationBuilder()
+    .token(TOKEN)
+    .read_timeout(60)
+    .write_timeout(60)
+    .connect_timeout(60)
+    .pool_timeout(60)
+    .build()
+)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("top", top_cmd))
     app.add_handler(CommandHandler("favorites", favorites_cmd))
@@ -552,5 +560,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
