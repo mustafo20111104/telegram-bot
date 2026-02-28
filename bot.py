@@ -75,9 +75,10 @@ def increment_top(title, url):
     top[url]["count"] += 1
     save_top(top)
 
+# ─── SEARCH ───────────────────────────────────────────────────────────────────
 def search_youtube_api(query, limit=5):
     if not YT_API_KEY:
-        return search_youtube_ytdlp(query, limit)
+        return []
     try:
         params = {
             "part": "snippet",
@@ -100,41 +101,14 @@ def search_youtube_api(query, limit=5):
                 "uid": url_to_id(yt_url),
                 "duration": "?",
                 "channel": channel,
-                "source": "🎬 YouTube",
+                "source": "🎬 YT",
+                "platform": "youtube",
             })
         return results
     except:
-        return search_youtube_ytdlp(query, limit)
-
-def search_youtube_ytdlp(query, limit=5):
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "extract_flat": True,
-        "no_warnings": True,
-        "socket_timeout": 15,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-            results = []
-            for v in result.get("entries", []):
-                if v:
-                    dur = v.get("duration", 0)
-                    yt_url = f"https://youtube.com/watch?v={v.get('id','')}"
-                    results.append({
-                        "title": v.get("title", "?"),
-                        "url": yt_url,
-                        "uid": url_to_id(yt_url),
-                        "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
-                        "channel": v.get("uploader", "YouTube"),
-                        "source": "🎬 YouTube",
-                    })
-            return results
-    except:
         return []
 
-def search_soundcloud(query, limit=2):
+def search_soundcloud(query, limit=7):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -157,70 +131,65 @@ def search_soundcloud(query, limit=2):
                         "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
                         "channel": v.get("uploader", "SC"),
                         "source": "🎵 SC",
+                        "platform": "soundcloud",
                     })
             return results
     except:
         return []
 
 def combine_search(query, limit=5):
-    yt = search_youtube_api(query, limit)
-    sc = search_soundcloud(query, 2)
-    return (yt + sc)[:limit + 2]
+    sc = search_soundcloud(query, limit)
+    yt = search_youtube_api(query, 3)
+    combined = sc + yt
+    return combined[:limit + 3]
 
+# ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
 async def download_audio(chat_id, url, title, context, user_id=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
     outfile = f"/tmp/audio_{chat_id}"
 
-    # Avval FFmpeg bilan mp3 ga convert qilib ko'r
+    # SoundCloud va boshqalar uchun oddiy yuklab olish
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio",
         "outtmpl": f"{outfile}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "socket_timeout": 60,
         "retries": 5,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
-        }],
     }
 
     real_title = title
     artist = ""
-    success = False
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", title)
             artist = info.get("uploader", "")
-            success = True
-    except Exception as e1:
-        # FFmpeg yoq, convert qilmasdan yukla
+    except Exception as e:
+        # FFmpeg bilan convert qilib ko'r
         ydl_opts2 = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+            "format": "bestaudio/best",
             "outtmpl": f"{outfile}.%(ext)s",
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
             "socket_timeout": 60,
-            "retries": 5,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "128",
+            }],
         }
         try:
             with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
                 info = ydl.extract_info(url, download=True)
                 real_title = info.get("title", title)
                 artist = info.get("uploader", "")
-                success = True
         except Exception as e2:
-            await msg.edit_text(f"❌ Yuklashda xatolik. Boshqa qoshiq bilan urinib koring.")
+            await msg.edit_text("❌ Yuklashda xatolik. Boshqa qoshiq bilan urinib koring.")
             return
-
-    if not success:
-        await msg.edit_text("❌ Yuklab bolmadi.")
-        return
 
     # Faylni qidir
     filepath = None
@@ -277,7 +246,7 @@ async def download_audio(chat_id, url, title, context, user_id=None):
                         write_timeout=120,
                     )
             except Exception as e:
-                await msg.edit_text(f"❌ Yuborishda xatolik: {str(e)[:80]}")
+                await msg.edit_text(f"❌ Yuborishda xatolik.")
                 return
 
         try:
@@ -288,10 +257,10 @@ async def download_audio(chat_id, url, title, context, user_id=None):
     else:
         await msg.edit_text("❌ Fayl topilmadi.")
 
+# ─── DOWNLOAD VIDEO ───────────────────────────────────────────────────────────
 async def download_video(chat_id, url, context):
     msg = await context.bot.send_message(chat_id=chat_id, text="🎬 Video yuklanmoqda...")
     outfile = f"/tmp/video_{chat_id}.mp4"
-
     ydl_opts = {
         "format": "best[height<=480]/best",
         "outtmpl": outfile,
@@ -337,6 +306,7 @@ async def download_video(chat_id, url, context):
     else:
         await msg.edit_text("❌ Video topilmadi.")
 
+# ─── KEYBOARDS ────────────────────────────────────────────────────────────────
 def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Qidirish", switch_inline_query_current_chat=""),
@@ -347,17 +317,19 @@ def main_keyboard():
          InlineKeyboardButton("ℹ️ Yordam", callback_data="help")],
     ])
 
+# ─── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"🎵 *Salom, {user.first_name}!*\n\n"
-        "🎬 YouTube — mp3 + video\n"
-        "🎵 SoundCloud — mp3\n\n"
+        "🎵 SoundCloud — asosiy manba\n"
+        "🎬 YouTube — qoshimcha\n\n"
         "📌 Qoshiq nomi yoki link yuboring!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
 
+# ─── HANDLE TEXT ──────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.message.chat_id
@@ -404,6 +376,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.edit_text(result_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
+# ─── CALLBACK ─────────────────────────────────────────────────────────────────
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -523,9 +496,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await query.edit_message_text(
             "ℹ️ *Yordam*\n\n"
-            "🎵 Qoshiq nomi → YouTube + SoundCloud\n"
+            "🎵 Qoshiq nomi → SoundCloud + YouTube dan qidiradi\n"
             "🔗 YouTube link → MP3 yoki Video\n"
-            "🔗 Boshqa link → video yuklab beradi\n\n"
+            "🔗 Boshqa link → yuklab beradi\n\n"
             "📌 *Buyruqlar:*\n"
             "/start /top /favorites /history /stats",
             parse_mode="Markdown",
@@ -536,6 +509,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎵 *Bosh menyu*\n\nQoshiq nomi yoki link yuboring!",
             parse_mode="Markdown", reply_markup=main_keyboard())
 
+# ─── COMMANDS ─────────────────────────────────────────────────────────────────
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top = load_top()
     if not top:
@@ -592,6 +566,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
     app = (
         ApplicationBuilder()
