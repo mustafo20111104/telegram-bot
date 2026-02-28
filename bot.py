@@ -2,9 +2,8 @@ import os
 import json
 import re
 import hashlib
-import gc
-import logging
-from datetime import datetime
+import requests
+import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -15,18 +14,9 @@ from telegram.ext import (
     filters,
 )
 
-# ============== KONFIGURATSIYA ==============
 TOKEN = "8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
 YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
 
-# Logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# ============== URL CACHE ==============
 URL_CACHE = {}
 
 def url_to_id(url):
@@ -37,23 +27,24 @@ def url_to_id(url):
 def id_to_url(uid):
     return URL_CACHE.get(uid, "")
 
-# ============== DATABASE ==============
 DB_FILE = "/tmp/users.json"
 TOP_FILE = "/tmp/top.json"
 
 def load_db():
     try:
         if os.path.exists(DB_FILE):
-            with open(DB_FILE, "r", encoding="utf-8") as f:
+            with open(DB_FILE, "r") as f:
                 return json.load(f)
-    except: pass
+    except:
+        pass
     return {}
 
 def save_db(db):
     try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
+        with open(DB_FILE, "w") as f:
             json.dump(db, f, ensure_ascii=False, indent=2)
-    except: pass
+    except:
+        pass
 
 def get_user(db, user_id):
     uid = str(user_id)
@@ -64,16 +55,18 @@ def get_user(db, user_id):
 def load_top():
     try:
         if os.path.exists(TOP_FILE):
-            with open(TOP_FILE, "r", encoding="utf-8") as f:
+            with open(TOP_FILE, "r") as f:
                 return json.load(f)
-    except: pass
+    except:
+        pass
     return {}
 
 def save_top(top):
     try:
-        with open(TOP_FILE, "w", encoding="utf-8") as f:
+        with open(TOP_FILE, "w") as f:
             json.dump(top, f, ensure_ascii=False, indent=2)
-    except: pass
+    except:
+        pass
 
 def increment_top(title, url):
     top = load_top()
@@ -82,15 +75,18 @@ def increment_top(title, url):
     top[url]["count"] += 1
     save_top(top)
 
-# ============== SEARCH ==============
 def search_youtube_api(query, limit=5):
     if not YT_API_KEY:
         return search_youtube_ytdlp(query, limit)
     try:
-        import requests
-        url = "https://www.googleapis.com/youtube/v3/search"
-        params = {"part": "snippet", "q": query, "type": "video", "maxResults": limit, "key": YT_API_KEY}
-        res = requests.get(url, params=params, timeout=10)
+        params = {
+            "part": "snippet",
+            "q": query,
+            "type": "video",
+            "maxResults": limit,
+            "key": YT_API_KEY,
+        }
+        res = requests.get("https://www.googleapis.com/youtube/v3/search", params=params, timeout=8)
         data = res.json()
         results = []
         for item in data.get("items", []):
@@ -99,114 +95,117 @@ def search_youtube_api(query, limit=5):
             channel = item["snippet"]["channelTitle"]
             yt_url = f"https://youtube.com/watch?v={vid_id}"
             results.append({
-                "title": title, "url": yt_url, "uid": url_to_id(yt_url),
-                "duration": "?", "channel": channel, "source": "🎬 YouTube"
+                "title": title,
+                "url": yt_url,
+                "uid": url_to_id(yt_url),
+                "duration": "?",
+                "channel": channel,
+                "source": "🎬 YouTube",
             })
         return results
-    except Exception as e:
-        logger.error(f"YT API error: {e}")
+    except:
         return search_youtube_ytdlp(query, limit)
 
 def search_youtube_ytdlp(query, limit=5):
-    import yt_dlp
-    ydl_opts = {"quiet": True, "skip_download": True, "extract_flat": True, "no_warnings": True, "socket_timeout": 15}
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "no_warnings": True,
+        "socket_timeout": 15,
+    }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
             results = []
             for v in result.get("entries", []):
-                if v and v.get("id"):
-                    dur = v.get("duration", 0) or 0
-                    yt_url = f"https://youtube.com/watch?v={v.get('id')}"
+                if v:
+                    dur = v.get("duration", 0)
+                    yt_url = f"https://youtube.com/watch?v={v.get('id','')}"
                     results.append({
-                        "title": v.get("title", "Noma'lum"), "url": yt_url, "uid": url_to_id(yt_url),
+                        "title": v.get("title", "?"),
+                        "url": yt_url,
+                        "uid": url_to_id(yt_url),
                         "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
-                        "channel": v.get("uploader", "YouTube"), "source": "🎬 YouTube"
+                        "channel": v.get("uploader", "YouTube"),
+                        "source": "🎬 YouTube",
                     })
             return results
-    except Exception as e:
-        logger.error(f"YT search error: {e}")
+    except:
         return []
 
 def search_soundcloud(query, limit=2):
-    import yt_dlp
-    ydl_opts = {"quiet": True, "skip_download": True, "extract_flat": True, "no_warnings": True, "socket_timeout": 15}
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "no_warnings": True,
+        "socket_timeout": 15,
+    }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             result = ydl.extract_info(f"scsearch{limit}:{query}", download=False)
             results = []
             for v in result.get("entries", []):
                 if v:
-                    dur = v.get("duration", 0) or 0
+                    dur = v.get("duration", 0)
                     sc_url = v.get("webpage_url", "")
                     results.append({
-                        "title": v.get("title", "Noma'lum"), "url": sc_url, "uid": url_to_id(sc_url),
+                        "title": v.get("title", "?"),
+                        "url": sc_url,
+                        "uid": url_to_id(sc_url),
                         "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
-                        "channel": v.get("uploader", "SoundCloud"), "source": "🎵 SC"
+                        "channel": v.get("uploader", "SC"),
+                        "source": "🎵 SC",
                     })
             return results
-    except Exception as e:
-        logger.error(f"SC search error: {e}")
+    except:
         return []
 
 def combine_search(query, limit=5):
-    import concurrent.futures
-    results = []
-    try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            yt_future = executor.submit(search_youtube_api, query, limit)
-            sc_future = executor.submit(search_soundcloud, query, 2)
-            yt_results = yt_future.result(timeout=12)
-            sc_results = sc_future.result(timeout=12)
-            results = (yt_results + sc_results)[:limit + 2]
-    except Exception as e:
-        logger.error(f"Combine error: {e}")
-        results = search_youtube_ytdlp(query, limit)
-    return results
+    yt = search_youtube_api(query, limit)
+    sc = search_soundcloud(query, 2)
+    return (yt + sc)[:limit + 2]
 
-# ============== DOWNLOAD ==============
 async def download_audio(chat_id, url, title, context, user_id=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
-    
-    import yt_dlp
-    import uuid
-    
-    unique_id = uuid.uuid4().hex[:8]
-    outfile = f"/tmp/audio_{unique_id}"
-    
+    outfile = f"/tmp/audio_{chat_id}"
+
+    # Avval FFmpeg bilan mp3 ga convert qilib ko'r
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": f"{outfile}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "socket_timeout": 90,
+        "socket_timeout": 60,
         "retries": 5,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
-            "preferredquality": "192"
+            "preferredquality": "128",
         }],
     }
-    
+
     real_title = title
     artist = ""
-    
+    success = False
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", title)
             artist = info.get("uploader", "")
-            logger.info(f"Downloaded: {real_title}")
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        
+            success = True
+    except Exception as e1:
+        # FFmpeg yoq, convert qilmasdan yukla
         ydl_opts2 = {
-            "format": "bestaudio[ext=m4a]/best",
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
             "outtmpl": f"{outfile}.%(ext)s",
             "quiet": True,
+            "no_warnings": True,
             "noplaylist": True,
-            "socket_timeout": 90,
+            "socket_timeout": 60,
             "retries": 5,
         }
         try:
@@ -214,127 +213,130 @@ async def download_audio(chat_id, url, title, context, user_id=None):
                 info = ydl.extract_info(url, download=True)
                 real_title = info.get("title", title)
                 artist = info.get("uploader", "")
+                success = True
         except Exception as e2:
-            logger.error(f"Second attempt error: {e2}")
-            await msg.edit_text(
-                "❌ <b>Xatolik!</b>\n\n"
-                "Video himoyalangan yoki verification talab qiladi.\n"
-                "Boshqa video tanlab ko'ring!",
-                parse_mode="HTML"
-            )
+            await msg.edit_text(f"❌ Yuklashda xatolik. Boshqa qoshiq bilan urinib koring.")
             return
 
-    # Find file
+    if not success:
+        await msg.edit_text("❌ Yuklab bolmadi.")
+        return
+
+    # Faylni qidir
     filepath = None
-    for ext in ["mp3", "m4a", "webm", "opus", "ogg"]:
+    for ext in ["mp3", "m4a", "webm", "opus", "ogg", "mp4"]:
         p = f"{outfile}.{ext}"
         if os.path.exists(p):
             filepath = p
             break
-    
+
     if not filepath:
         for f in os.listdir("/tmp"):
-            if f.startswith("audio_") and f.endswith((".mp3", ".m4a", ".webm")):
+            if f.startswith(f"audio_{chat_id}"):
                 filepath = f"/tmp/{f}"
                 break
 
     if filepath and os.path.exists(filepath):
+        increment_top(real_title, url)
+        if user_id:
+            db = load_db()
+            user = get_user(db, user_id)
+            user["downloads"] += 1
+            h = {"title": real_title, "url": url}
+            if h not in user["history"]:
+                user["history"].insert(0, h)
+                user["history"] = user["history"][:15]
+            save_db(db)
+
+        uid = url_to_id(url)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❤️ Sevimli", callback_data=f"fav|{uid}|{real_title[:25]}"),
+            InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}"),
+        ]])
+
         try:
-            file_size = os.path.getsize(filepath)
-            if file_size > 50 * 1024 * 1024:
-                await msg.edit_text("❌ Fayl 50MB dan katta!")
-                os.remove(filepath)
-                return
-            
-            increment_top(real_title, url)
-            
-            if user_id:
-                db = load_db()
-                user = get_user(db, user_id)
-                user["downloads"] = user.get("downloads", 0) + 1
-                h = {"title": real_title, "url": url}
-                if h not in user["history"]:
-                    user["history"].insert(0, h)
-                    user["history"] = user["history"][:15]
-                save_db(db)
-            
-            uid = url_to_id(url)
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❤️ Sevimli", callback_data=f"fav|{uid}|{real_title[:25]}"),
-                 InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}")]
-            ])
-            
+            with open(filepath, "rb") as audio:
+                await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=audio,
+                    title=real_title,
+                    performer=artist,
+                    reply_markup=keyboard,
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+        except Exception:
             try:
-                with open(filepath, "rb") as audio:
-                    await context.bot.send_audio(
-                        chat_id=chat_id, audio=audio,
-                        title=real_title[:200], performer=artist[:100],
-                        reply_markup=keyboard
-                    )
-            except Exception as e:
-                logger.error(f"Send error: {e}")
                 with open(filepath, "rb") as doc:
                     await context.bot.send_document(
-                        chat_id=chat_id, document=doc,
-                        caption=f"🎵 {real_title}", reply_markup=keyboard
+                        chat_id=chat_id,
+                        document=doc,
+                        caption=f"🎵 {real_title}",
+                        reply_markup=keyboard,
+                        read_timeout=120,
+                        write_timeout=120,
                     )
-            
-            try:
-                os.remove(filepath)
-            except: pass
-            
-            await msg.delete()
-            gc.collect()
-            
-        except Exception as e:
-            logger.error(f"Process error: {e}")
-            await msg.edit_text(f"❌ Xatolik: {str(e)[:50]}")
+            except Exception as e:
+                await msg.edit_text(f"❌ Yuborishda xatolik: {str(e)[:80]}")
+                return
+
+        try:
+            os.remove(filepath)
+        except:
+            pass
+        await msg.delete()
     else:
         await msg.edit_text("❌ Fayl topilmadi.")
 
 async def download_video(chat_id, url, context):
     msg = await context.bot.send_message(chat_id=chat_id, text="🎬 Video yuklanmoqda...")
-    
-    import yt_dlp
-    import uuid
-    
-    unique_id = uuid.uuid4().hex[:8]
-    outfile = f"/tmp/video_{unique_id}.mp4"
-    
+    outfile = f"/tmp/video_{chat_id}.mp4"
+
     ydl_opts = {
         "format": "best[height<=480]/best",
         "outtmpl": outfile,
         "quiet": True,
         "noplaylist": True,
-        "socket_timeout": 90,
+        "socket_timeout": 60,
+        "retries": 3,
     }
-    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", "Video")
     except Exception as e:
-        logger.error(f"Video error: {e}")
-        await msg.edit_text("❌ Video yuklashda xatolik!")
+        await msg.edit_text("❌ Video yuklashda xatolik.")
         return
 
     if os.path.exists(outfile):
         if os.path.getsize(outfile) > 50 * 1024 * 1024:
-            await msg.edit_text("❌ Video 50MB dan katta!")
+            await msg.edit_text("❌ Video 50MB dan katta. MP3 yuklab oling.")
             os.remove(outfile)
             return
         try:
             with open(outfile, "rb") as video:
-                await context.bot.send_video(chat_id=chat_id, video=video, caption=f"🎬 {real_title}")
-        except:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=video,
+                    caption=f"🎬 {real_title}",
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+        except Exception:
             with open(outfile, "rb") as doc:
-                await context.bot.send_document(chat_id=chat_id, document=doc, caption=f"🎬 {real_title}")
-        os.remove(outfile)
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=doc,
+                    caption=f"🎬 {real_title}",
+                )
+        try:
+            os.remove(outfile)
+        except:
+            pass
         await msg.delete()
     else:
         await msg.edit_text("❌ Video topilmadi.")
 
-# ============== KEYBOARDS ==============
 def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Qidirish", switch_inline_query_current_chat=""),
@@ -345,14 +347,13 @@ def main_keyboard():
          InlineKeyboardButton("ℹ️ Yordam", callback_data="help")],
     ])
 
-# ============== HANDLERS ==============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"🎵 *Salom, {user.first_name}!*\n\n"
         "🎬 YouTube — mp3 + video\n"
         "🎵 SoundCloud — mp3\n\n"
-        "📌 Qo'shiq nomi yoki link yuboring!",
+        "📌 Qoshiq nomi yoki link yuboring!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
@@ -362,22 +363,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     user_id = update.effective_user.id
 
-    # YouTube link
     if re.search(r"(youtube\.com|youtu\.be)", text):
         uid = url_to_id(text)
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎵 MP3", callback_data=f"dl|{uid}"),
-             InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}")]
-        ])
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🎵 MP3", callback_data=f"dl|{uid}"),
+            InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}"),
+        ]])
         await update.message.reply_text("YouTube link! Nima yuklamoqchisiz?", reply_markup=keyboard)
         return
 
-    # Other links
     if re.search(r"https?://", text):
         await download_video(chat_id, text, context)
         return
 
-    # Search
     db = load_db()
     user = get_user(db, user_id)
     limit = user["settings"]["results"]
@@ -399,11 +397,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     for i, r in enumerate(results[:10]):
         result_text += f"{nums[i]} {r['source']} | {r['title'][:40]}\n    ⏱ {r['duration']} • {r['channel'][:20]}\n\n"
-        buttons.append([InlineKeyboardButton(f"{nums[i]} {r['title'][:45]}", callback_data=f"dl|{r['uid']}")])
+        buttons.append([InlineKeyboardButton(
+            f"{nums[i]} {r['title'][:45]}",
+            callback_data=f"dl|{r['uid']}"
+        )])
 
     await msg.edit_text(result_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
-# ============== CALLBACK ==============
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -415,7 +415,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = data.split("|")[1]
         url = id_to_url(uid)
         if not url:
-            await query.answer("❌ Muddati o'tgan. Qayta qidiring.", show_alert=True)
+            await query.answer("❌ Muddati otgan. Qayta qidiring.", show_alert=True)
             return
         await download_audio(chat_id, url, "Qoshiq", context, user_id)
 
@@ -423,7 +423,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = data.split("|")[1]
         url = id_to_url(uid)
         if not url:
-            await query.answer("❌ Muddati o'tgan. Qayta qidiring.", show_alert=True)
+            await query.answer("❌ Muddati otgan. Qayta qidiring.", show_alert=True)
             return
         await download_video(chat_id, url, context)
 
@@ -433,7 +433,188 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = parts[2] if len(parts) > 2 else "Qoshiq"
         url = id_to_url(uid)
         if not url:
-            await query.answer("❌ Muddati
+            await query.answer("❌ Muddati otgan.", show_alert=True)
+            return
+        db = load_db()
+        user = get_user(db, user_id)
+        if not any(f.get("uid") == uid for f in user["favorites"]):
+            user["favorites"].insert(0, {"title": title, "uid": uid, "url": url})
+            user["favorites"] = user["favorites"][:50]
+            save_db(db)
+            await query.answer("❤️ Sevimlilarga qoshildi!", show_alert=True)
+        else:
+            await query.answer("Allaqachon sevimlilar royxatida!", show_alert=True)
+
+    elif data == "my_fav":
+        db = load_db()
+        user = get_user(db, user_id)
+        favs = user["favorites"]
+        if not favs:
+            await query.edit_message_text("❤️ Sevimlilar royxatingiz bosh.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+        else:
+            text = "❤️ *Sevimlilar:*\n\n"
+            buttons = []
+            for i, fav in enumerate(favs[:10]):
+                text += f"{i+1}. {fav['title'][:45]}\n"
+                buttons.append([InlineKeyboardButton(f"▶️ {fav['title'][:40]}", callback_data=f"dl|{fav['uid']}")])
+            buttons.append([InlineKeyboardButton("🗑 Tozalash", callback_data="clr_fav"),
+                            InlineKeyboardButton("🔙 Orqaga", callback_data="back")])
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data == "clr_fav":
+        db = load_db()
+        user = get_user(db, user_id)
+        user["favorites"] = []
+        save_db(db)
+        await query.edit_message_text("🗑 Sevimlilar tozalandi.")
+
+    elif data == "top10":
+        top = load_top()
+        if not top:
+            text = "🏆 Hali yuklanmagan qoshiqlar yoq."
+        else:
+            sorted_top = sorted(top.values(), key=lambda x: x["count"], reverse=True)[:10]
+            nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+            text = "🏆 *TOP 10:*\n\n"
+            for i, item in enumerate(sorted_top):
+                text += f"{nums[i]} {item['title'][:40]} — *{item['count']}x*\n"
+        await query.edit_message_text(text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+
+    elif data == "history":
+        db = load_db()
+        user = get_user(db, user_id)
+        history = user["history"]
+        if not history:
+            await query.edit_message_text("📜 Tarix bosh.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+        else:
+            text = "📜 *Tarix:*\n\n"
+            buttons = []
+            for i, item in enumerate(history[:10]):
+                text += f"{i+1}. {item['title'][:45]}\n"
+                uid = url_to_id(item["url"])
+                buttons.append([InlineKeyboardButton(f"▶️ {item['title'][:40]}", callback_data=f"dl|{uid}")])
+            buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="back")])
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data == "settings":
+        db = load_db()
+        user = get_user(db, user_id)
+        cnt = user["settings"]["results"]
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"{'✅' if cnt==3 else '3️⃣'} 3 ta", callback_data="sr3"),
+             InlineKeyboardButton(f"{'✅' if cnt==5 else '5️⃣'} 5 ta", callback_data="sr5"),
+             InlineKeyboardButton(f"{'✅' if cnt==10 else '🔟'} 10 ta", callback_data="sr10")],
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="back")],
+        ])
+        await query.edit_message_text(f"⚙️ *Sozlamalar*\n\nNatijalar soni: *{cnt} ta*",
+            parse_mode="Markdown", reply_markup=keyboard)
+
+    elif data in ["sr3", "sr5", "sr10"]:
+        count = int(data[2:])
+        db = load_db()
+        user = get_user(db, user_id)
+        user["settings"]["results"] = count
+        save_db(db)
+        await query.answer(f"✅ {count} ta natija!", show_alert=True)
+
+    elif data == "help":
+        await query.edit_message_text(
+            "ℹ️ *Yordam*\n\n"
+            "🎵 Qoshiq nomi → YouTube + SoundCloud\n"
+            "🔗 YouTube link → MP3 yoki Video\n"
+            "🔗 Boshqa link → video yuklab beradi\n\n"
+            "📌 *Buyruqlar:*\n"
+            "/start /top /favorites /history /stats",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+
+    elif data == "back":
+        await query.edit_message_text(
+            "🎵 *Bosh menyu*\n\nQoshiq nomi yoki link yuboring!",
+            parse_mode="Markdown", reply_markup=main_keyboard())
+
+async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    top = load_top()
+    if not top:
+        await update.message.reply_text("🏆 Hali yuklanmagan qoshiqlar yoq.")
+        return
+    sorted_top = sorted(top.values(), key=lambda x: x["count"], reverse=True)[:10]
+    nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    text = "🏆 *TOP 10:*\n\n"
+    for i, item in enumerate(sorted_top):
+        text += f"{nums[i]} {item['title'][:40]} — *{item['count']}x*\n"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def favorites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = load_db()
+    user = get_user(db, update.effective_user.id)
+    favs = user["favorites"]
+    if not favs:
+        await update.message.reply_text("❤️ Sevimlilar royxatingiz bosh.")
+        return
+    text = "❤️ *Sevimlilar:*\n\n"
+    buttons = []
+    for i, fav in enumerate(favs[:10]):
+        text += f"{i+1}. {fav['title'][:45]}\n"
+        buttons.append([InlineKeyboardButton(f"▶️ {fav['title'][:40]}", callback_data=f"dl|{fav['uid']}")])
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = load_db()
+    user = get_user(db, update.effective_user.id)
+    history = user["history"]
+    if not history:
+        await update.message.reply_text("📜 Tarix bosh.")
+        return
+    text = "📜 *Tarix:*\n\n"
+    buttons = []
+    for i, item in enumerate(history[:10]):
+        text += f"{i+1}. {item['title'][:45]}\n"
+        uid = url_to_id(item["url"])
+        buttons.append([InlineKeyboardButton(f"▶️ {item['title'][:40]}", callback_data=f"dl|{uid}")])
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = load_db()
+    user = get_user(db, update.effective_user.id)
+    top = load_top()
+    await update.message.reply_text(
+        f"📊 *Statistika:*\n\n"
+        f"⬇️ Siz yuklagan: *{user['downloads']} ta*\n"
+        f"❤️ Sevimlilar: *{len(user['favorites'])} ta*\n"
+        f"📜 Tarix: *{len(user['history'])} ta*\n\n"
+        f"🌍 *Umumiy:*\n"
+        f"🎵 Jami: *{len(top)} ta*\n"
+        f"⬇️ Yuklanmalar: *{sum(v['count'] for v in top.values())} ta*",
+        parse_mode="Markdown"
+    )
+
+def main():
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .read_timeout(120)
+        .write_timeout(120)
+        .connect_timeout(60)
+        .pool_timeout(60)
+        .build()
+    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("top", top_cmd))
+    app.add_handler(CommandHandler("favorites", favorites_cmd))
+    app.add_handler(CommandHandler("history", history_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    print("🎵 MusicBot ishga tushdi ✅")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
 
 
 
