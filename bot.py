@@ -14,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
+TOKEN ="8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
 YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
 
 URL_CACHE = {}
@@ -49,7 +49,7 @@ def save_db(db):
 def get_user(db, user_id):
     uid = str(user_id)
     if uid not in db:
-        db[uid] = {"favorites": [], "history": [], "settings": {"results": 5}, "downloads": 0}
+        db[uid] = {"favorites": [], "history": [], "settings": {"results": 10}, "downloads": 0}
     return db[uid]
 
 def load_top():
@@ -76,9 +76,9 @@ def increment_top(title, url):
     save_top(top)
 
 # ─── SEARCH ───────────────────────────────────────────────────────────────────
-def search_youtube_api(query, limit=5):
+def search_youtube_api(query, limit=10):
     if not YT_API_KEY:
-        return []
+        return search_youtube_ytdlp(query, limit)
     try:
         params = {
             "part": "snippet",
@@ -102,13 +102,40 @@ def search_youtube_api(query, limit=5):
                 "duration": "?",
                 "channel": channel,
                 "source": "🎬 YT",
-                "platform": "youtube",
             })
         return results
     except:
+        return search_youtube_ytdlp(query, limit)
+
+def search_youtube_ytdlp(query, limit=10):
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "no_warnings": True,
+        "socket_timeout": 15,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            results = []
+            for v in result.get("entries", []):
+                if v:
+                    dur = v.get("duration", 0)
+                    yt_url = f"https://youtube.com/watch?v={v.get('id','')}"
+                    results.append({
+                        "title": v.get("title", "?"),
+                        "url": yt_url,
+                        "uid": url_to_id(yt_url),
+                        "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
+                        "channel": v.get("uploader", "YouTube"),
+                        "source": "🎬 YT",
+                    })
+            return results
+    except:
         return []
 
-def search_soundcloud(query, limit=7):
+def search_soundcloud(query, limit=10):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -131,24 +158,27 @@ def search_soundcloud(query, limit=7):
                         "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
                         "channel": v.get("uploader", "SC"),
                         "source": "🎵 SC",
-                        "platform": "soundcloud",
                     })
             return results
     except:
         return []
 
-def combine_search(query, limit=5):
+def combine_search(query, limit=10):
     sc = search_soundcloud(query, limit)
-    yt = search_youtube_api(query, 3)
-    combined = sc + yt
-    return combined[:limit + 3]
+    yt = search_youtube_api(query, 5)
+    # SC birinchi, YT keyin, takrorlanmasin
+    combined = sc[:]
+    yt_titles = [r["title"].lower() for r in sc]
+    for r in yt:
+        if r["title"].lower() not in yt_titles:
+            combined.append(r)
+    return combined[:limit]
 
 # ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
 async def download_audio(chat_id, url, title, context, user_id=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
     outfile = f"/tmp/audio_{chat_id}"
 
-    # SoundCloud va boshqalar uchun oddiy yuklab olish
     ydl_opts = {
         "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio",
         "outtmpl": f"{outfile}.%(ext)s",
@@ -167,8 +197,7 @@ async def download_audio(chat_id, url, title, context, user_id=None):
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", title)
             artist = info.get("uploader", "")
-    except Exception as e:
-        # FFmpeg bilan convert qilib ko'r
+    except:
         ydl_opts2 = {
             "format": "bestaudio/best",
             "outtmpl": f"{outfile}.%(ext)s",
@@ -187,11 +216,10 @@ async def download_audio(chat_id, url, title, context, user_id=None):
                 info = ydl.extract_info(url, download=True)
                 real_title = info.get("title", title)
                 artist = info.get("uploader", "")
-        except Exception as e2:
+        except:
             await msg.edit_text("❌ Yuklashda xatolik. Boshqa qoshiq bilan urinib koring.")
             return
 
-    # Faylni qidir
     filepath = None
     for ext in ["mp3", "m4a", "webm", "opus", "ogg", "mp4"]:
         p = f"{outfile}.{ext}"
@@ -234,7 +262,7 @@ async def download_audio(chat_id, url, title, context, user_id=None):
                     read_timeout=120,
                     write_timeout=120,
                 )
-        except Exception:
+        except:
             try:
                 with open(filepath, "rb") as doc:
                     await context.bot.send_document(
@@ -245,8 +273,8 @@ async def download_audio(chat_id, url, title, context, user_id=None):
                         read_timeout=120,
                         write_timeout=120,
                     )
-            except Exception as e:
-                await msg.edit_text(f"❌ Yuborishda xatolik.")
+            except:
+                await msg.edit_text("❌ Yuborishda xatolik.")
                 return
 
         try:
@@ -261,37 +289,71 @@ async def download_audio(chat_id, url, title, context, user_id=None):
 async def download_video(chat_id, url, context):
     msg = await context.bot.send_message(chat_id=chat_id, text="🎬 Video yuklanmoqda...")
     outfile = f"/tmp/video_{chat_id}.mp4"
+
+    # Video hajmini tekshir
+    ydl_opts_info = {
+        "quiet": True,
+        "skip_download": True,
+        "no_warnings": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            info = ydl.extract_info(url, download=False)
+            real_title = info.get("title", "Video")
+            duration = info.get("duration", 0)
+    except:
+        real_title = "Video"
+        duration = 0
+
+    # 50MB dan katta bo'lsa link yuborish
+    if duration and duration > 600:  # 10 daqiqadan uzun
+        await msg.edit_text(
+            f"🎬 *{real_title}*\n\n"
+            f"⚠️ Video juda uzun ({duration//60} daqiqa).\n"
+            f"📥 Yuklab olish uchun:\n{url}",
+            parse_mode="Markdown"
+        )
+        return
+
     ydl_opts = {
-        "format": "best[height<=480]/best",
+        "format": "best[height<=720][filesize<50M]/best[height<=480]/best",
         "outtmpl": outfile,
         "quiet": True,
         "noplaylist": True,
         "socket_timeout": 60,
         "retries": 3,
     }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            real_title = info.get("title", "Video")
+            ydl.extract_info(url, download=True)
     except Exception as e:
         await msg.edit_text("❌ Video yuklashda xatolik.")
         return
 
     if os.path.exists(outfile):
-        if os.path.getsize(outfile) > 50 * 1024 * 1024:
-            await msg.edit_text("❌ Video 50MB dan katta. MP3 yuklab oling.")
+        size = os.path.getsize(outfile)
+        if size > 50 * 1024 * 1024:
+            await msg.edit_text(
+                f"🎬 *{real_title}*\n\n"
+                f"⚠️ Video 50MB dan katta ({size//1024//1024}MB).\n"
+                f"📥 Yuklab olish uchun:\n{url}",
+                parse_mode="Markdown"
+            )
             os.remove(outfile)
             return
+
         try:
             with open(outfile, "rb") as video:
                 await context.bot.send_video(
                     chat_id=chat_id,
                     video=video,
                     caption=f"🎬 {real_title}",
-                    read_timeout=120,
-                    write_timeout=120,
+                    read_timeout=180,
+                    write_timeout=180,
                 )
-        except Exception:
+        except:
             with open(outfile, "rb") as doc:
                 await context.bot.send_document(
                     chat_id=chat_id,
@@ -322,8 +384,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"🎵 *Salom, {user.first_name}!*\n\n"
-        "🎵 SoundCloud — asosiy manba\n"
-        "🎬 YouTube — qoshimcha\n\n"
+        "🎵 SoundCloud + YouTube — musiqa\n"
+        "🎬 YouTube link — video\n\n"
         "📌 Qoshiq nomi yoki link yuboring!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
@@ -477,15 +539,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = get_user(db, user_id)
         cnt = user["settings"]["results"]
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"{'✅' if cnt==3 else '3️⃣'} 3 ta", callback_data="sr3"),
-             InlineKeyboardButton(f"{'✅' if cnt==5 else '5️⃣'} 5 ta", callback_data="sr5"),
-             InlineKeyboardButton(f"{'✅' if cnt==10 else '🔟'} 10 ta", callback_data="sr10")],
+            [InlineKeyboardButton(f"{'✅' if cnt==5 else '5️⃣'} 5 ta", callback_data="sr5"),
+             InlineKeyboardButton(f"{'✅' if cnt==10 else '🔟'} 10 ta", callback_data="sr10"),
+             InlineKeyboardButton(f"{'✅' if cnt==15 else '➕'} 15 ta", callback_data="sr15")],
             [InlineKeyboardButton("🔙 Orqaga", callback_data="back")],
         ])
         await query.edit_message_text(f"⚙️ *Sozlamalar*\n\nNatijalar soni: *{cnt} ta*",
             parse_mode="Markdown", reply_markup=keyboard)
 
-    elif data in ["sr3", "sr5", "sr10"]:
+    elif data in ["sr5", "sr10", "sr15"]:
         count = int(data[2:])
         db = load_db()
         user = get_user(db, user_id)
@@ -496,9 +558,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await query.edit_message_text(
             "ℹ️ *Yordam*\n\n"
-            "🎵 Qoshiq nomi → SoundCloud + YouTube dan qidiradi\n"
+            "🎵 Qoshiq nomi → 10 ta natija (SC + YT)\n"
             "🔗 YouTube link → MP3 yoki Video\n"
-            "🔗 Boshqa link → yuklab beradi\n\n"
+            "🎬 Katta video → yuklab olish linki beriladi\n\n"
             "📌 *Buyruqlar:*\n"
             "/start /top /favorites /history /stats",
             parse_mode="Markdown",
@@ -589,6 +651,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
