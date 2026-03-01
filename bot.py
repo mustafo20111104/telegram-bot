@@ -16,6 +16,7 @@ from telegram.ext import (
 
 TOKEN = "8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
 YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
+ADMIN_ID = "8312461995"
 
 URL_CACHE = {}
 
@@ -46,10 +47,18 @@ def save_db(db):
     except:
         pass
 
-def get_user(db, user_id):
+def get_user(db, user_id, user_obj=None):
     uid = str(user_id)
     if uid not in db:
-        db[uid] = {"favorites": [], "history": [], "settings": {"results": 10}, "downloads": 0}
+        db[uid] = {
+            "favorites": [],
+            "history": [],
+            "settings": {"results": 10},
+            "downloads": 0,
+            "name": user_obj.full_name if user_obj else "Noma'lum",
+            "username": f"@{user_obj.username}" if user_obj and user_obj.username else "",
+            "joined": __import__("datetime").datetime.now().strftime("%Y-%m-%d"),
+        }
     return db[uid]
 
 def load_top():
@@ -138,30 +147,16 @@ def search_soundcloud(query, limit=10):
 def combine_search(query, limit=10):
     sc = search_soundcloud(query, limit)
     yt = search_youtube_api(query, 5)
-    # SC birinchi, YT keyin, takrorlanmasin
-    combined = sc
-    for r in yt:
-        if not any(x["url"] == r["url"] for x in combined):
+    seen = set()
+    combined = []
+    for r in sc + yt:
+        if r["title"] not in seen:
+            seen.add(r["title"])
             combined.append(r)
     return combined[:limit]
 
-# ─── GET VIDEO URL ─────────────────────────────────────────────────────────────
-def get_video_direct_url(url):
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "format": "best[height<=720]/best",
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info.get("url", ""), info.get("title", "Video"), info.get("filesize", 0)
-    except:
-        return "", "", 0
-
 # ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
-async def download_audio(chat_id, url, title, context, user_id=None):
+async def download_audio(chat_id, url, title, context, user_id=None, user_obj=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
     outfile = f"/tmp/audio_{chat_id}"
 
@@ -223,7 +218,7 @@ async def download_audio(chat_id, url, title, context, user_id=None):
         increment_top(real_title, url)
         if user_id:
             db = load_db()
-            user = get_user(db, user_id)
+            user = get_user(db, user_id, user_obj)
             user["downloads"] += 1
             h = {"title": real_title, "url": url}
             if h not in user["history"]:
@@ -276,15 +271,15 @@ async def download_video(chat_id, url, context):
     msg = await context.bot.send_message(chat_id=chat_id, text="🎬 Video yuklanmoqda...")
     outfile = f"/tmp/video_{chat_id}.mp4"
 
+    # Sifatni pasaytirib yuklash — Telegram ga sig'sin
     ydl_opts = {
-        "format": "best[height<=720]/best",
+        "format": "best[height<=480][filesize<45M]/best[height<=360]/worst",
         "outtmpl": outfile,
         "quiet": True,
         "noplaylist": True,
         "socket_timeout": 60,
         "retries": 3,
     }
-
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -294,29 +289,17 @@ async def download_video(chat_id, url, context):
         return
 
     if os.path.exists(outfile):
-        size = os.path.getsize(outfile)
-        if size > 50 * 1024 * 1024:
-            # 50MB dan katta — direct link yuborish
+        size_mb = os.path.getsize(outfile) / (1024 * 1024)
+        if size_mb > 50:
+            # Juda katta — eng past sifat
+            ydl_opts["format"] = "worst"
             try:
-                os.remove(outfile)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.extract_info(url, download=True)
             except:
-                pass
-            direct_url, vtitle, _ = get_video_direct_url(url)
-            if direct_url:
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⬇️ Yuklab olish", url=direct_url)
-                ]])
-                await msg.edit_text(
-                    f"🎬 *{real_title}*\n\n⚠️ Video 50MB dan katta.\nQuyidagi tugma orqali yuklab oling:",
-                    parse_mode="Markdown",
-                    reply_markup=keyboard
-                )
-            else:
-                await msg.edit_text(
-                    f"🎬 *{real_title}*\n\n⚠️ Video juda katta (50MB+).\n🔗 To'g'ridan yuklab oling:\n{url}",
-                    parse_mode="Markdown"
-                )
-            return
+                await msg.edit_text("❌ Video juda katta, yuklab bo'lmadi.")
+                os.remove(outfile)
+                return
 
         try:
             with open(outfile, "rb") as video:
@@ -356,20 +339,63 @@ def main_keyboard():
 # ─── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db = load_db()
+    get_user(db, user.id, user)
+    save_db(db)
     await update.message.reply_text(
         f"🎵 *Salom, {user.first_name}!*\n\n"
-        "🎵 SoundCloud — musiqa\n"
-        "🎬 YouTube link — mp3 + video\n\n"
+        "🎵 SoundCloud + YouTube dan qidiradi\n"
+        "🎬 Video ham yuklab beradi\n\n"
         "📌 Qoshiq nomi yoki link yuboring!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
+
+# ─── ADMIN PANEL ──────────────────────────────────────────────────────────────
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Siz admin emassiz!")
+        return
+
+    db = load_db()
+    top = load_top()
+    total_users = len(db)
+    total_downloads = sum(u.get("downloads", 0) for u in db.values())
+    total_songs = len(top)
+
+    text = f"👑 *Admin Panel*\n\n"
+    text += f"👥 Foydalanuvchilar: *{total_users} ta*\n"
+    text += f"⬇️ Jami yuklanmalar: *{total_downloads} ta*\n"
+    text += f"🎵 Jami qoshiqlar: *{total_songs} ta*\n\n"
+    text += f"📋 *So'nggi foydalanuvchilar:*\n"
+
+    users_list = list(db.items())[-10:]
+    for uid, u in users_list:
+        name = u.get("name", "?")
+        username = u.get("username", "")
+        downloads = u.get("downloads", 0)
+        joined = u.get("joined", "?")
+        text += f"• {name} {username} — {downloads} ta, {joined}\n"
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Batafsil statistika", callback_data="admin_stats"),
+         InlineKeyboardButton("👥 Barcha users", callback_data="admin_users")],
+        [InlineKeyboardButton("📢 Xabar yuborish", callback_data="admin_broadcast")],
+    ])
+
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 # ─── HANDLE TEXT ──────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.message.chat_id
     user_id = update.effective_user.id
+    user_obj = update.effective_user
+
+    # Foydalanuvchini DBga qo'sh
+    db = load_db()
+    get_user(db, user_id, user_obj)
+    save_db(db)
 
     if re.search(r"(youtube\.com|youtu\.be)", text):
         uid = url_to_id(text)
@@ -385,7 +411,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     db = load_db()
-    user = get_user(db, user_id)
+    user = get_user(db, user_id, user_obj)
     limit = user["settings"]["results"]
 
     msg = await update.message.reply_text(f"🔍 *{text}* qidirilmoqda...", parse_mode="Markdown")
@@ -418,6 +444,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
+    user_obj = update.effective_user
     chat_id = query.message.chat_id
 
     if data.startswith("dl|"):
@@ -426,7 +453,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url:
             await query.answer("❌ Muddati otgan. Qayta qidiring.", show_alert=True)
             return
-        await download_audio(chat_id, url, "Qoshiq", context, user_id)
+        await download_audio(chat_id, url, "Qoshiq", context, user_id, user_obj)
 
     elif data.startswith("vid|"):
         uid = data.split("|")[1]
@@ -445,7 +472,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Muddati otgan.", show_alert=True)
             return
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         if not any(f.get("uid") == uid for f in user["favorites"]):
             user["favorites"].insert(0, {"title": title, "uid": uid, "url": url})
             user["favorites"] = user["favorites"][:50]
@@ -456,7 +483,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "my_fav":
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         favs = user["favorites"]
         if not favs:
             await query.edit_message_text("❤️ Sevimlilar royxatingiz bosh.",
@@ -473,7 +500,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "clr_fav":
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         user["favorites"] = []
         save_db(db)
         await query.edit_message_text("🗑 Sevimlilar tozalandi.")
@@ -493,7 +520,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "history":
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         history = user["history"]
         if not history:
             await query.edit_message_text("📜 Tarix bosh.",
@@ -510,7 +537,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "settings":
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         cnt = user["settings"]["results"]
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"{'✅' if cnt==5 else '5️⃣'} 5 ta", callback_data="sr5"),
@@ -523,17 +550,47 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ["sr5", "sr10"]:
         count = int(data[2:])
         db = load_db()
-        user = get_user(db, user_id)
+        user = get_user(db, user_id, user_obj)
         user["settings"]["results"] = count
         save_db(db)
         await query.answer(f"✅ {count} ta natija!", show_alert=True)
 
+    elif data == "admin_stats":
+        if user_id != ADMIN_ID:
+            return
+        db = load_db()
+        top = load_top()
+        total_downloads = sum(u.get("downloads", 0) for u in db.values())
+        top5 = sorted(top.values(), key=lambda x: x["count"], reverse=True)[:5]
+        text = f"📊 *Batafsil statistika:*\n\n"
+        text += f"👥 Foydalanuvchilar: *{len(db)} ta*\n"
+        text += f"⬇️ Jami yuklanmalar: *{total_downloads} ta*\n"
+        text += f"🎵 Jami qoshiqlar: *{len(top)} ta*\n\n"
+        text += f"🔥 *Top 5 qoshiq:*\n"
+        for i, item in enumerate(top5):
+            text += f"{i+1}. {item['title'][:35]} — {item['count']}x\n"
+        await query.edit_message_text(text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+
+    elif data == "admin_users":
+        if user_id != ADMIN_ID:
+            return
+        db = load_db()
+        text = f"👥 *Foydalanuvchilar ({len(db)} ta):*\n\n"
+        for uid, u in list(db.items())[-20:]:
+            name = u.get("name", "?")
+            username = u.get("username", "")
+            downloads = u.get("downloads", 0)
+            text += f"• {name} {username} — {downloads} ta\n"
+        await query.edit_message_text(text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
+
     elif data == "help":
         await query.edit_message_text(
             "ℹ️ *Yordam*\n\n"
-            "🎵 Qoshiq nomi → SoundCloud + YouTube dan qidiradi\n"
+            "🎵 Qoshiq nomi → SoundCloud + YouTube\n"
             "🔗 YouTube link → MP3 yoki Video\n"
-            "🎬 Katta video → yuklab olish linki beriladi\n\n"
+            "🔗 Boshqa link → yuklab beradi\n\n"
             "📌 *Buyruqlar:*\n"
             "/start /top /favorites /history /stats",
             parse_mode="Markdown",
@@ -559,7 +616,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def favorites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = load_db()
-    user = get_user(db, update.effective_user.id)
+    user = get_user(db, update.effective_user.id, update.effective_user)
     favs = user["favorites"]
     if not favs:
         await update.message.reply_text("❤️ Sevimlilar royxatingiz bosh.")
@@ -573,7 +630,7 @@ async def favorites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = load_db()
-    user = get_user(db, update.effective_user.id)
+    user = get_user(db, update.effective_user.id, update.effective_user)
     history = user["history"]
     if not history:
         await update.message.reply_text("📜 Tarix bosh.")
@@ -588,7 +645,7 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = load_db()
-    user = get_user(db, update.effective_user.id)
+    user = get_user(db, update.effective_user.id, update.effective_user)
     top = load_top()
     await update.message.reply_text(
         f"📊 *Statistika:*\n\n"
@@ -617,6 +674,7 @@ def main():
     app.add_handler(CommandHandler("favorites", favorites_cmd))
     app.add_handler(CommandHandler("history", history_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("🎵 MusicBot ishga tushdi ✅")
@@ -624,6 +682,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
