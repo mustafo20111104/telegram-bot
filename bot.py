@@ -14,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN ="8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
+TOKEN = "8312461995:AAEWbinigBntWn8AHUbEmf-hXGvFUFUTYOc"
 YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
 
 URL_CACHE = {}
@@ -78,7 +78,7 @@ def increment_top(title, url):
 # ─── SEARCH ───────────────────────────────────────────────────────────────────
 def search_youtube_api(query, limit=10):
     if not YT_API_KEY:
-        return search_youtube_ytdlp(query, limit)
+        return []
     try:
         params = {
             "part": "snippet",
@@ -104,34 +104,6 @@ def search_youtube_api(query, limit=10):
                 "source": "🎬 YT",
             })
         return results
-    except:
-        return search_youtube_ytdlp(query, limit)
-
-def search_youtube_ytdlp(query, limit=10):
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "extract_flat": True,
-        "no_warnings": True,
-        "socket_timeout": 15,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-            results = []
-            for v in result.get("entries", []):
-                if v:
-                    dur = v.get("duration", 0)
-                    yt_url = f"https://youtube.com/watch?v={v.get('id','')}"
-                    results.append({
-                        "title": v.get("title", "?"),
-                        "url": yt_url,
-                        "uid": url_to_id(yt_url),
-                        "duration": f"{dur//60}:{dur%60:02d}" if dur else "?",
-                        "channel": v.get("uploader", "YouTube"),
-                        "source": "🎬 YT",
-                    })
-            return results
     except:
         return []
 
@@ -167,12 +139,26 @@ def combine_search(query, limit=10):
     sc = search_soundcloud(query, limit)
     yt = search_youtube_api(query, 5)
     # SC birinchi, YT keyin, takrorlanmasin
-    combined = sc[:]
-    yt_titles = [r["title"].lower() for r in sc]
+    combined = sc
     for r in yt:
-        if r["title"].lower() not in yt_titles:
+        if not any(x["url"] == r["url"] for x in combined):
             combined.append(r)
     return combined[:limit]
+
+# ─── GET VIDEO URL ─────────────────────────────────────────────────────────────
+def get_video_direct_url(url):
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "format": "best[height<=720]/best",
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info.get("url", ""), info.get("title", "Video"), info.get("filesize", 0)
+    except:
+        return "", "", 0
 
 # ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
 async def download_audio(chat_id, url, title, context, user_id=None):
@@ -290,34 +276,8 @@ async def download_video(chat_id, url, context):
     msg = await context.bot.send_message(chat_id=chat_id, text="🎬 Video yuklanmoqda...")
     outfile = f"/tmp/video_{chat_id}.mp4"
 
-    # Video hajmini tekshir
-    ydl_opts_info = {
-        "quiet": True,
-        "skip_download": True,
-        "no_warnings": True,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-            info = ydl.extract_info(url, download=False)
-            real_title = info.get("title", "Video")
-            duration = info.get("duration", 0)
-    except:
-        real_title = "Video"
-        duration = 0
-
-    # 50MB dan katta bo'lsa link yuborish
-    if duration and duration > 600:  # 10 daqiqadan uzun
-        await msg.edit_text(
-            f"🎬 *{real_title}*\n\n"
-            f"⚠️ Video juda uzun ({duration//60} daqiqa).\n"
-            f"📥 Yuklab olish uchun:\n{url}",
-            parse_mode="Markdown"
-        )
-        return
-
     ydl_opts = {
-        "format": "best[height<=720][filesize<50M]/best[height<=480]/best",
+        "format": "best[height<=720]/best",
         "outtmpl": outfile,
         "quiet": True,
         "noplaylist": True,
@@ -327,7 +287,8 @@ async def download_video(chat_id, url, context):
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(url, download=True)
+            info = ydl.extract_info(url, download=True)
+            real_title = info.get("title", "Video")
     except Exception as e:
         await msg.edit_text("❌ Video yuklashda xatolik.")
         return
@@ -335,13 +296,26 @@ async def download_video(chat_id, url, context):
     if os.path.exists(outfile):
         size = os.path.getsize(outfile)
         if size > 50 * 1024 * 1024:
-            await msg.edit_text(
-                f"🎬 *{real_title}*\n\n"
-                f"⚠️ Video 50MB dan katta ({size//1024//1024}MB).\n"
-                f"📥 Yuklab olish uchun:\n{url}",
-                parse_mode="Markdown"
-            )
-            os.remove(outfile)
+            # 50MB dan katta — direct link yuborish
+            try:
+                os.remove(outfile)
+            except:
+                pass
+            direct_url, vtitle, _ = get_video_direct_url(url)
+            if direct_url:
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬇️ Yuklab olish", url=direct_url)
+                ]])
+                await msg.edit_text(
+                    f"🎬 *{real_title}*\n\n⚠️ Video 50MB dan katta.\nQuyidagi tugma orqali yuklab oling:",
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            else:
+                await msg.edit_text(
+                    f"🎬 *{real_title}*\n\n⚠️ Video juda katta (50MB+).\n🔗 To'g'ridan yuklab oling:\n{url}",
+                    parse_mode="Markdown"
+                )
             return
 
         try:
@@ -350,8 +324,8 @@ async def download_video(chat_id, url, context):
                     chat_id=chat_id,
                     video=video,
                     caption=f"🎬 {real_title}",
-                    read_timeout=180,
-                    write_timeout=180,
+                    read_timeout=120,
+                    write_timeout=120,
                 )
         except:
             with open(outfile, "rb") as doc:
@@ -384,8 +358,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"🎵 *Salom, {user.first_name}!*\n\n"
-        "🎵 SoundCloud + YouTube — musiqa\n"
-        "🎬 YouTube link — video\n\n"
+        "🎵 SoundCloud — musiqa\n"
+        "🎬 YouTube link — mp3 + video\n\n"
         "📌 Qoshiq nomi yoki link yuboring!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
@@ -540,14 +514,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cnt = user["settings"]["results"]
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"{'✅' if cnt==5 else '5️⃣'} 5 ta", callback_data="sr5"),
-             InlineKeyboardButton(f"{'✅' if cnt==10 else '🔟'} 10 ta", callback_data="sr10"),
-             InlineKeyboardButton(f"{'✅' if cnt==15 else '➕'} 15 ta", callback_data="sr15")],
+             InlineKeyboardButton(f"{'✅' if cnt==10 else '🔟'} 10 ta", callback_data="sr10")],
             [InlineKeyboardButton("🔙 Orqaga", callback_data="back")],
         ])
         await query.edit_message_text(f"⚙️ *Sozlamalar*\n\nNatijalar soni: *{cnt} ta*",
             parse_mode="Markdown", reply_markup=keyboard)
 
-    elif data in ["sr5", "sr10", "sr15"]:
+    elif data in ["sr5", "sr10"]:
         count = int(data[2:])
         db = load_db()
         user = get_user(db, user_id)
@@ -558,7 +531,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await query.edit_message_text(
             "ℹ️ *Yordam*\n\n"
-            "🎵 Qoshiq nomi → 10 ta natija (SC + YT)\n"
+            "🎵 Qoshiq nomi → SoundCloud + YouTube dan qidiradi\n"
             "🔗 YouTube link → MP3 yoki Video\n"
             "🎬 Katta video → yuklab olish linki beriladi\n\n"
             "📌 *Buyruqlar:*\n"
@@ -651,6 +624,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
