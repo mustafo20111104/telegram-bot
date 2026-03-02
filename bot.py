@@ -19,6 +19,7 @@ YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
 ADMIN_ID = "8312461995"
 
 URL_CACHE = {}
+INSTAGRAM_TITLES = {}  # Instagram URL → video title (musiqa nomi uchun)
 
 def url_to_id(url):
     uid = hashlib.md5(url.encode()).hexdigest()[:12]
@@ -85,7 +86,6 @@ def increment_top(title, url):
     top[url]["count"] += 1
     save_top(top)
 
-# ─── DETECT PLATFORM ──────────────────────────────────────────────────────────
 def detect_platform(url):
     if re.search(r"(youtube\.com|youtu\.be)", url):
         return "youtube"
@@ -103,9 +103,8 @@ def detect_platform(url):
         return "other"
     return None
 
-# ─── SHAZAM SEARCH ────────────────────────────────────────────────────────────
-def shazam_search(query, limit=10):
-    """Shazam orqali qidirish — YouTube dan yuklab beradi"""
+# ─── SEARCH ───────────────────────────────────────────────────────────────────
+def search_soundcloud(query, limit=10):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -113,7 +112,6 @@ def shazam_search(query, limit=10):
         "no_warnings": True,
         "socket_timeout": 15,
     }
-    # Avval SoundCloud dan qidir
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             result = ydl.extract_info(f"scsearch{limit}:{query}", download=False)
@@ -166,7 +164,7 @@ def search_youtube_api(query, limit=5):
         return []
 
 def combine_search(query, limit=10):
-    sc = shazam_search(query, limit)
+    sc = search_soundcloud(query, limit)
     yt = search_youtube_api(query, 5)
     seen = set()
     combined = []
@@ -176,7 +174,35 @@ def combine_search(query, limit=10):
             combined.append(r)
     return combined[:limit]
 
-# ─── DOWNLOAD MEDIA ───────────────────────────────────────────────────────────
+# ─── GET INSTAGRAM MUSIC TITLE ────────────────────────────────────────────────
+def get_instagram_music_title(url):
+    """Instagram videodagi musiqa nomini olishga harakat qiladi"""
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "no_warnings": True,
+        "socket_timeout": 15,
+    }
+    if os.path.exists("/app/cookies.txt"):
+        ydl_opts["cookiefile"] = "/app/cookies.txt"
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # Musiqa nomini turli joylardan qidirish
+            music = (
+                info.get("track") or
+                info.get("artist") or
+                info.get("music") or
+                info.get("title", "")
+            )
+            artist = info.get("artist", "")
+            if artist and music and artist not in music:
+                return f"{artist} - {music}"
+            return music or info.get("title", "")
+    except:
+        return ""
+
+# ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
 async def download_audio(chat_id, url, title, context, user_id=None, user_obj=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Audio yuklanmoqda...")
     outfile = f"/tmp/audio_{chat_id}"
@@ -189,11 +215,9 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
         "noplaylist": True,
         "socket_timeout": 60,
         "retries": 5,
-        "cookiefile": "/app/cookies.txt" if os.path.exists("/app/cookies.txt") else None,
     }
-    # None bo'lsa o'chir
-    if not ydl_opts["cookiefile"]:
-        del ydl_opts["cookiefile"]
+    if os.path.exists("/app/cookies.txt"):
+        ydl_opts["cookiefile"] = "/app/cookies.txt"
 
     real_title = title
     artist = ""
@@ -281,15 +305,12 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     else:
         await msg.edit_text("❌ Fayl topilmadi.")
 
+# ─── DOWNLOAD VIDEO ───────────────────────────────────────────────────────────
 async def download_video(chat_id, url, context, platform="other"):
     platform_names = {
-        "youtube": "YouTube",
-        "instagram": "Instagram",
-        "tiktok": "TikTok",
-        "snapchat": "Snapchat",
-        "pinterest": "Pinterest",
-        "likee": "Likee",
-        "other": "Video",
+        "youtube": "YouTube", "instagram": "Instagram",
+        "tiktok": "TikTok", "snapchat": "Snapchat",
+        "pinterest": "Pinterest", "likee": "Likee", "other": "Video",
     }
     name = platform_names.get(platform, "Video")
     msg = await context.bot.send_message(chat_id=chat_id, text=f"🎬 {name} yuklanmoqda...")
@@ -310,7 +331,7 @@ async def download_video(chat_id, url, context, platform="other"):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", name)
-    except Exception as e:
+    except:
         await msg.edit_text(f"❌ {name} yuklashda xatolik.")
         return
 
@@ -369,12 +390,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎵 *Salom, {user.first_name}!*\n\n"
         "📥 *Yuklab olish:*\n"
         "• 🎬 YouTube — video + audio\n"
-        "• 📸 Instagram — post + video\n"
+        "• 📸 Instagram — video + musiqa\n"
         "• 🎵 TikTok — suvsiz video\n"
         "• 👻 Snapchat — video\n"
-        "• 📌 Pinterest — video + rasm\n"
+        "• 📌 Pinterest — video\n"
         "• 💚 Likee — video\n\n"
-        "🎤 *Shazam:* Qo'shiq nomi yozing!\n\n"
+        "🎤 *Qo'shiq qidirish:* nom yozing!\n\n"
         "🔗 Link yuboring yoki qo'shiq nomi yozing!",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
@@ -403,28 +424,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎬 YouTube link! Nima yuklamoqchisiz?", reply_markup=keyboard)
         return
 
-    # Instagram link
+    # Instagram link — 3 ta variant
     if platform == "instagram":
         uid = url_to_id(text)
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🎵 Audio", callback_data=f"dl|{uid}"),
-            InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}"),
+            InlineKeyboardButton("🎵 To'liq musiqa", callback_data=f"ig_music|{uid}"),
+            InlineKeyboardButton("🎵 Videodagi musiqa", callback_data=f"dl|{uid}"),
+        ], [
+            InlineKeyboardButton("🎬 Videoni yukla", callback_data=f"vid|{uid}"),
         ]])
-        await update.message.reply_text("📸 Instagram link! Nima yuklamoqchisiz?", reply_markup=keyboard)
+        await update.message.reply_text(
+            "📸 *Instagram link!*\n\nNima kerak?",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
         return
 
-    # Boshqa linklar — to'g'ridan video yukla
+    # TikTok, Snapchat, Pinterest, Likee — to'g'ridan video
     if platform in ["tiktok", "snapchat", "pinterest", "likee", "other"]:
         await download_video(chat_id, text, context, platform)
         return
 
-    # Qo'shiq qidirish (Shazam/SoundCloud)
+    # Qo'shiq qidirish
     db = load_db()
     user = get_user(db, user_id, user_obj)
     limit = user["settings"]["results"]
 
     msg = await update.message.reply_text(
-        f"🔍 *{text}* qidirilmoqda...\n_SoundCloud + YouTube_",
+        f"🔍 *{text}* qidirilmoqda...",
         parse_mode="Markdown"
     )
 
@@ -450,11 +477,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.edit_text(result_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
-# ─── HANDLE VOICE/VIDEO MESSAGE ───────────────────────────────────────────────
+# ─── HANDLE VOICE ─────────────────────────────────────────────────────────────
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎤 Ovozli xabar qabul qilindi!\n"
-        "⚠️ Hozircha ovozli xabar orqali qidirish ishlamaydi.\n"
+        "⚠️ Hozircha ovozli xabar orqali qidirish mavjud emas.\n"
         "Qo'shiq nomini yozing!"
     )
 
@@ -467,7 +494,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_obj = update.effective_user
     chat_id = query.message.chat_id
 
-    if data.startswith("dl|"):
+    # Instagram → To'liq musiqa qidirish
+    if data.startswith("ig_music|"):
+        uid = data.split("|")[1]
+        url = id_to_url(uid)
+        if not url:
+            await query.answer("❌ Muddati otgan. Qayta yuboring.", show_alert=True)
+            return
+        await query.edit_message_text("🔍 Videodagi musiqa nomi aniqlanmoqda...")
+        music_title = get_instagram_music_title(url)
+        if music_title:
+            results = combine_search(music_title, 10)
+            if results:
+                nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+                result_text = f"🎵 *'{music_title}'* natijalari:\n\n"
+                buttons = []
+                for i, r in enumerate(results[:10]):
+                    result_text += f"{nums[i]} {r['source']} | {r['title'][:40]}\n    ⏱ {r['duration']} • {r['channel'][:20]}\n\n"
+                    buttons.append([InlineKeyboardButton(
+                        f"{nums[i]} {r['title'][:45]}",
+                        callback_data=f"dl|{r['uid']}"
+                    )])
+                await query.edit_message_text(result_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+            else:
+                await query.edit_message_text(f"❌ '{music_title}' topilmadi. Qo'lda qidiring!")
+        else:
+            await query.edit_message_text(
+                "❌ Musiqa nomi aniqlanmadi.\n\n"
+                "Qo'shiq nomini qo'lda yozing:",
+            )
+
+    elif data.startswith("dl|"):
         uid = data.split("|")[1]
         url = id_to_url(uid)
         if not url:
@@ -581,7 +638,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ℹ️ *Yordam*\n\n"
             "📥 *Link yuborish:*\n"
             "• YouTube → MP3 yoki Video\n"
-            "• Instagram → Audio yoki Video\n"
+            "• Instagram → To'liq musiqa / Videodagi musiqa / Video\n"
             "• TikTok → Suvsiz video\n"
             "• Snapchat, Pinterest, Likee → Video\n\n"
             "🎤 *Qidirish:*\n"
@@ -734,6 +791,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
