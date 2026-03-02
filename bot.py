@@ -16,7 +16,7 @@ from telegram.ext import (
 
 TOKEN = "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"
 YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
-ADMIN_ID = "6705765282"
+ADMIN_ID = 6705765282
 
 URL_CACHE = {}
 INSTAGRAM_TITLES = {}  # Instagram URL → video title (musiqa nomi uchun)
@@ -791,6 +791,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
