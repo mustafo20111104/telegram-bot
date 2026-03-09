@@ -249,7 +249,6 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
     outfile = "/tmp/audio_" + str(chat_id)
 
-    # Eski fayllarni tozalash
     for ext in ["mp3", "m4a", "webm", "opus", "ogg", "mp4"]:
         p = outfile + "." + ext
         if os.path.exists(p):
@@ -259,12 +258,44 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     import shutil
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
+    # Avval qo'shiq nomini aniqlaymiz (yuklamasdan)
+    info_opts = {
+        "quiet": True, "skip_download": True,
+        "no_warnings": True, "socket_timeout": 15,
+    }
+    if os.path.exists("/app/cookies.txt"):
+        info_opts["cookiefile"] = "/app/cookies.txt"
+
+    real_title = title
+    artist = ""
+    is_youtube = "youtube" in url or "youtu.be" in url
+
+    try:
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            real_title = info.get("title", title)
+            artist = info.get("uploader", info.get("artist", ""))
+    except:
+        pass
+
+    # YouTube bo'lsa — SoundCloud dan qidirib yuklaymiz
+    if is_youtube:
+        await msg.edit_text("🔄 Qidirilmoqda...")
+        query = real_title if real_title != title else title
+        sc_results = search_soundcloud(query, 8)
+        if sc_results:
+            result_text, buttons = format_results(sc_results)
+            await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
+        else:
+            await msg.edit_text("❌ Topilmadi. Qo'shiq nomini yozing.")
+        return
+
+    # YouTube emas (SoundCloud, Instagram, TikTok...) — to'g'ridan yuklaymiz
     opts = {
         "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": outfile + ".%(ext)s",
         "quiet": True, "no_warnings": True,
         "noplaylist": True, "socket_timeout": 60, "retries": 3,
-        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
     }
     if has_ffmpeg:
         opts["postprocessors"] = [{
@@ -275,29 +306,13 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
 
-    real_title = title
-    artist = ""
-    thumb_url = ""
-
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", title)
             artist = info.get("uploader", info.get("artist", ""))
-            thumb_url = info.get("thumbnail", "")
     except Exception as e:
-        err = str(e)
-        # YouTube bloklasa — SoundCloud dan avtomatik qidirish
-        if "Sign in" in err or "confirm" in err.lower() or "bot" in err.lower():
-            await msg.edit_text("🔄 Qidirilmoqda...")
-            sc_results = search_soundcloud(title, 5)
-            if sc_results:
-                result_text, buttons = format_results(sc_results)
-                await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
-            else:
-                await msg.edit_text("❌ Topilmadi. Boshqa qo'shiq tanlang.")
-        else:
-            await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
+        await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
         return
 
     # mp3 fayl izlash
@@ -788,6 +803,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
