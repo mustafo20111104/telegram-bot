@@ -89,7 +89,7 @@ def search_soundcloud(query, limit=10):
                     dur = v.get("duration", 0)
                     sc_url = v.get("webpage_url", "")
                     out.append({"title": v.get("title", "?"), "url": sc_url, "uid": url_to_id(sc_url),
-                                "duration": str(dur//60) + ":" + str(dur%60).zfill(2) if dur else "?",
+                                "duration": str(int(dur//60)) + ":" + str(int(dur%60)).zfill(2) if dur else "?",
                                 "channel": v.get("uploader", "SC"), "source": "SoundCloud"})
             return out
     except: return []
@@ -296,11 +296,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Hech narsa topilmadi.")
         return
     nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    result_text = "🎵 " + text + " natijalari:\n\n"
+    result_text = "🎵 Natijalar:\n\n"
     buttons = []
     for i, r in enumerate(results[:10]):
-        result_text += nums[i] + " " + r["source"] + " | " + r["title"][:40] + "\n    " + r["duration"] + " | " + r["channel"][:20] + "\n\n"
-        buttons.append([InlineKeyboardButton(nums[i] + " " + r["title"][:45], callback_data="dl|" + r["uid"])])
+        dur = r["duration"] if r["duration"] != "?" else ""
+        result_text += nums[i] + " " + r["title"][:45] + (" — " + dur if dur else "") + "\n"
+        btn_text = nums[i] + " " + r["title"][:42] + (" " + dur if dur else "")
+        buttons.append([InlineKeyboardButton(btn_text, callback_data="dl|" + r["uid"])])
     await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -326,11 +328,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             results = combine_search(music_title, 10)
             if results:
                 nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-                result_text = "🎵 " + music_title + " natijalari:\n\n"
+                result_text = "🎵 Natijalar:\n\n"
                 buttons = []
                 for i, r in enumerate(results[:10]):
-                    result_text += nums[i] + " " + r["source"] + " | " + r["title"][:40] + "\n    " + r["duration"] + " | " + r["channel"][:20] + "\n\n"
-                    buttons.append([InlineKeyboardButton(nums[i] + " " + r["title"][:45], callback_data="dl|" + r["uid"])])
+                    dur = r["duration"] if r["duration"] != "?" else ""
+                    result_text += nums[i] + " " + r["title"][:45] + (" — " + dur if dur else "") + "\n"
+                    btn_text = nums[i] + " " + r["title"][:42] + (" " + dur if dur else "")
+                    buttons.append([InlineKeyboardButton(btn_text, callback_data="dl|" + r["uid"])])
                 await query.edit_message_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
             else:
                 await query.edit_message_text("❌ " + music_title + " topilmadi. Qolda yozing:")
@@ -561,24 +565,37 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Yuklanmalar: " + str(sum(v["count"] for v in top.values())) + " ta"
     )
 
+import time
+
+async def error_handler(update, context):
+    print(f"⚠️ Xato: {context.error}")
+
 def main():
-    app = (ApplicationBuilder().token(TOKEN)
-        .read_timeout(120).write_timeout(120)
-        .connect_timeout(60).pool_timeout(60).build())
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("favorites", favorites_cmd))
-    app.add_handler(CommandHandler("history", history_cmd))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("admin", admin_cmd))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("🎵 MusicBot ishga tushdi ✅")
-    app.run_polling()
+    while True:
+        try:
+            app = (ApplicationBuilder().token(TOKEN)
+                .read_timeout(120).write_timeout(120)
+                .connect_timeout(60).pool_timeout(60).build())
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("top", top_cmd))
+            app.add_handler(CommandHandler("favorites", favorites_cmd))
+            app.add_handler(CommandHandler("history", history_cmd))
+            app.add_handler(CommandHandler("stats", stats_cmd))
+            app.add_handler(CommandHandler("admin", admin_cmd))
+            app.add_handler(CallbackQueryHandler(callback_handler))
+            app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_voice))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+            app.add_error_handler(error_handler)
+            print("🎵 MusicBot ishga tushdi ✅")
+            app.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            print(f"❌ Bot to'xtadi: {e}")
+            print("🔄 5 soniyadan keyin qayta uriniladi...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
+
 
 
 
