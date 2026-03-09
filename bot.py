@@ -255,17 +255,22 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             try: os.remove(p)
             except: pass
 
+    # FFmpeg bor yoki yo'qligini tekshirish
+    import shutil
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+
     opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio",
+        "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio",
         "outtmpl": outfile + ".%(ext)s",
         "quiet": True, "no_warnings": True,
         "noplaylist": True, "socket_timeout": 60, "retries": 5,
-        "postprocessors": [{
+    }
+    if has_ffmpeg:
+        opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "192",
-        }],
-    }
+        }]
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
 
@@ -424,15 +429,24 @@ def link_keyboard(uid, platform):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db = load_db()
+    is_new = str(user.id) not in db
     get_user(db, user.id, user)
     save_db(db)
-    await update.message.reply_text(
-        "🎵 Salom, " + user.first_name + "!\n\n"
-        "Qo'shiq nomini yozing yoki link yuboring:\n\n"
-        "YouTube | Instagram | TikTok\n"
-        "Snapchat | Pinterest | Likee",
-        reply_markup=main_keyboard()
-    )
+    if is_new:
+        await update.message.reply_text(
+            "🎵 Salom, " + user.first_name + "! Xush kelibsiz!\n\n"
+            "Bu bot orqali:\n"
+            "Qo'shiq nomi yozib qidiring yoki\n"
+            "YouTube, Instagram, TikTok, Snapchat link yuboring.\n\n"
+            "Har bir link uchun:\n"
+            "🎵 To'liq musiqa | 🎵 Videodagi musiqa | 🎬 Video",
+            reply_markup=main_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "🎵 Bosh menyu\n\nQo'shiq nomi yozing yoki link yuboring!",
+            reply_markup=main_keyboard()
+        )
 
 # ─── HANDLE TEXT ──────────────────────────────────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -768,6 +782,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
