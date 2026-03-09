@@ -758,30 +758,25 @@ async def error_handler(update, context):
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
-    while True:
-        try:
-            app = (ApplicationBuilder().token(TOKEN)
-                .read_timeout(120).write_timeout(120)
-                .connect_timeout(60).pool_timeout(60).build())
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CommandHandler("top", top_cmd))
-            app.add_handler(CommandHandler("favorites", favorites_cmd))
-            app.add_handler(CommandHandler("history", history_cmd))
-            app.add_handler(CommandHandler("stats", stats_cmd))
-            app.add_handler(CommandHandler("admin", admin_cmd))
-            app.add_handler(CallbackQueryHandler(callback_handler))
-            app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_voice))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-            app.add_error_handler(error_handler)
-            print("🎵 MusicBot ishga tushdi!")
-            app.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            print("❌ Xato: " + str(e))
-            print("🔄 5 soniyadan keyin qayta uriniladi...")
-            time.sleep(5)
+    app = (ApplicationBuilder().token(TOKEN)
+        .read_timeout(120).write_timeout(120)
+        .connect_timeout(60).pool_timeout(60).build())
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("top", top_cmd))
+    app.add_handler(CommandHandler("favorites", favorites_cmd))
+    app.add_handler(CommandHandler("history", history_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(error_handler)
+    print("🎵 MusicBot ishga tushdi!")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
+
 
 
 
