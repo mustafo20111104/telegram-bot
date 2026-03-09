@@ -191,14 +191,15 @@ def search_youtube_api(query, limit=5):
         return []
 
 def combine_search(query, limit=10):
-    """YouTube Music + SoundCloud + YouTube API birlashtirilgan qidiruv"""
-    ym = search_youtube_music(query, limit)
-    sc = search_soundcloud(query, limit // 2)
-    yt = search_youtube_api(query, 3)
+    """SoundCloud (birinchi) + YouTube Music birlashtirilgan qidiruv
+    SoundCloud yuklanadi, YouTube esa ko'pincha bloklaydi"""
+    sc = search_soundcloud(query, limit)
+    ym = search_youtube_music(query, limit // 2)
 
     seen = set()
     combined = []
-    for r in ym + sc + yt:
+    # SoundCloud birinchi - chunki u yuklanadi
+    for r in sc + ym:
         key = r["title"].lower().strip()
         if key not in seen:
             seen.add(key)
@@ -255,15 +256,15 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             try: os.remove(p)
             except: pass
 
-    # FFmpeg bor yoki yo'qligini tekshirish
     import shutil
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
     opts = {
-        "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio",
+        "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": outfile + ".%(ext)s",
         "quiet": True, "no_warnings": True,
-        "noplaylist": True, "socket_timeout": 60, "retries": 5,
+        "noplaylist": True, "socket_timeout": 60, "retries": 3,
+        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
     }
     if has_ffmpeg:
         opts["postprocessors"] = [{
@@ -285,7 +286,18 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             artist = info.get("uploader", info.get("artist", ""))
             thumb_url = info.get("thumbnail", "")
     except Exception as e:
-        await msg.edit_text("❌ Yuklashda xatolik: " + str(e)[:100])
+        err = str(e)
+        # YouTube bloklasa — SoundCloud dan avtomatik qidirish
+        if "Sign in" in err or "confirm" in err.lower() or "bot" in err.lower():
+            await msg.edit_text("🔄 Qidirilmoqda...")
+            sc_results = search_soundcloud(title, 5)
+            if sc_results:
+                result_text, buttons = format_results(sc_results)
+                await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
+            else:
+                await msg.edit_text("❌ Topilmadi. Boshqa qo'shiq tanlang.")
+        else:
+            await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
         return
 
     # mp3 fayl izlash
@@ -776,6 +788,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
