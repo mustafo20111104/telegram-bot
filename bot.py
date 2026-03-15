@@ -5,6 +5,7 @@ import hashlib
 import requests
 import yt_dlp
 import time
+import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -28,8 +29,6 @@ def id_to_url(uid):
     return URL_CACHE.get(uid, "")
 
 def fmt_dur(seconds):
-    if not seconds:
-        return ""
     try:
         s = int(float(seconds))
         m, s = divmod(s, 60)
@@ -105,37 +104,8 @@ def detect_platform(url):
     if re.search(r"https?://", url): return "other"
     return None
 
-# ─── SEARCH ───────────────────────────────────────────────────────────────────
-def search_youtube_music(query, limit=10):
-    """YouTube Music orqali qidirish - eng yaxshi natija"""
-    opts = {
-        "quiet": True, "skip_download": True,
-        "extract_flat": True, "no_warnings": True,
-        "socket_timeout": 15,
-    }
-    results = []
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            data = ydl.extract_info(f"ytmsearch{limit}:{query}", download=False)
-            for v in data.get("entries", []):
-                if not v:
-                    continue
-                dur = v.get("duration", 0)
-                yt_url = v.get("webpage_url") or f"https://youtube.com/watch?v={v.get('id','')}"
-                results.append({
-                    "title": v.get("title", "?"),
-                    "artist": v.get("uploader", v.get("channel", "")),
-                    "url": yt_url,
-                    "uid": url_to_id(yt_url),
-                    "duration": fmt_dur(dur),
-                    "thumb": v.get("thumbnail", ""),
-                })
-    except:
-        pass
-    return results
-
+# ─── SEARCH FUNCTIONS ─────────────────────────────────────────────────────────
 def search_soundcloud(query, limit=10):
-    """SoundCloud dan qidirish"""
     opts = {
         "quiet": True, "skip_download": True,
         "extract_flat": True, "no_warnings": True,
@@ -146,68 +116,121 @@ def search_soundcloud(query, limit=10):
         with yt_dlp.YoutubeDL(opts) as ydl:
             data = ydl.extract_info(f"scsearch{limit}:{query}", download=False)
             for v in data.get("entries", []):
-                if not v:
-                    continue
-                dur = v.get("duration", 0)
+                if not v: continue
                 sc_url = v.get("webpage_url", "")
+                if not sc_url: continue
+                dur = v.get("duration", 0)
                 results.append({
                     "title": v.get("title", "?"),
                     "artist": v.get("uploader", ""),
                     "url": sc_url,
                     "uid": url_to_id(sc_url),
                     "duration": fmt_dur(dur),
-                    "thumb": v.get("thumbnail", ""),
+                    "source": "sc",
                 })
     except:
         pass
     return results
 
-def search_youtube_api(query, limit=5):
-    """YouTube API orqali qidirish"""
-    if not YT_API_KEY:
-        return []
+def search_youtube_music(query, limit=10):
+    opts = {
+        "quiet": True, "skip_download": True,
+        "extract_flat": True, "no_warnings": True,
+        "socket_timeout": 15,
+    }
+    results = []
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(f"ytmsearch{limit}:{query}", download=False)
+            for v in data.get("entries", []):
+                if not v: continue
+                vid_id = v.get("id", "")
+                if not vid_id: continue
+                yt_url = f"https://music.youtube.com/watch?v={vid_id}"
+                dur = v.get("duration", 0)
+                results.append({
+                    "title": v.get("title", "?"),
+                    "artist": v.get("uploader", v.get("channel", "")),
+                    "url": yt_url,
+                    "uid": url_to_id(yt_url),
+                    "duration": fmt_dur(dur),
+                    "source": "ytm",
+                })
+    except:
+        pass
+    return results
+
+def search_deezer(query, limit=10):
+    results = []
     try:
         res = requests.get(
-            "https://www.googleapis.com/youtube/v3/search",
-            params={"part": "snippet", "q": query, "type": "video",
-                    "videoCategoryId": "10",
-                    "maxResults": limit, "key": YT_API_KEY},
+            "https://api.deezer.com/search",
+            params={"q": query, "limit": limit},
             timeout=8
         )
-        results = []
-        for item in res.json().get("items", []):
-            vid_id = item["id"]["videoId"]
-            yt_url = f"https://youtube.com/watch?v={vid_id}"
-            results.append({
-                "title": item["snippet"]["title"],
-                "artist": item["snippet"]["channelTitle"],
-                "url": yt_url,
-                "uid": url_to_id(yt_url),
-                "duration": "",
-                "thumb": item["snippet"]["thumbnails"]["default"]["url"],
-            })
-        return results
+        data = res.json()
+        for item in data.get("data", []):
+            preview_url = item.get("preview", "")
+            title = item.get("title", "?")
+            artist = item.get("artist", {}).get("name", "")
+            dur = item.get("duration", 0)
+            track_id = str(item.get("id", ""))
+            deezer_url = item.get("link", f"https://deezer.com/track/{track_id}")
+            if preview_url:
+                results.append({
+                    "title": title,
+                    "artist": artist,
+                    "url": preview_url,
+                    "uid": url_to_id(preview_url),
+                    "duration": fmt_dur(dur),
+                    "source": "dz",
+                    "full_url": deezer_url,
+                    "is_preview": True,
+                })
     except:
-        return []
+        pass
+    return results
 
 def combine_search(query, limit=10):
-    """SoundCloud (birinchi) + YouTube Music birlashtirilgan qidiruv
-    SoundCloud yuklanadi, YouTube esa ko'pincha bloklaydi"""
     sc = search_soundcloud(query, limit)
     ym = search_youtube_music(query, limit // 2)
+    dz = search_deezer(query, limit // 2)
 
     seen = set()
     combined = []
-    # SoundCloud birinchi - chunki u yuklanadi
-    for r in sc + ym:
+    # SoundCloud birinchi — eng ishonchli manba
+    for r in sc + ym + dz:
         key = r["title"].lower().strip()
         if key not in seen:
             seen.add(key)
             combined.append(r)
     return combined[:limit]
 
+# ─── FORMAT RESULTS ───────────────────────────────────────────────────────────
+def format_results(results):
+    nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    source_icons = {"sc": "🎵", "ytm": "🎬", "dz": "🎶", "": "🎵"}
+    text = "🎵 Natijalar:\n\n"
+    buttons = []
+    for i, r in enumerate(results[:10]):
+        dur = r.get("duration", "")
+        artist = r.get("artist", "")
+        icon = source_icons.get(r.get("source", ""), "🎵")
+        title = r["title"][:40]
+        line = f"{nums[i]} {title}"
+        if artist:
+            line += f" — {artist[:18]}"
+        if dur:
+            line += f" [{dur}]"
+        text += line + "\n"
+        btn = f"{nums[i]} {r['title'][:35]}"
+        if dur:
+            btn += f" [{dur}]"
+        buttons.append([InlineKeyboardButton(btn, callback_data="dl|" + r["uid"])])
+    return text, buttons
+
 # ─── INSTAGRAM MUSIC ──────────────────────────────────────────────────────────
-def get_instagram_music_title(url):
+def get_media_music_title(url):
     opts = {"quiet": True, "skip_download": True, "no_warnings": True, "socket_timeout": 15}
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
@@ -222,67 +245,42 @@ def get_instagram_music_title(url):
     except:
         return ""
 
-# ─── FORMAT RESULTS ───────────────────────────────────────────────────────────
-def format_results(results):
-    """Natijalarni Tune Hunt uslubida formatlash"""
-    nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    text = "🎵 Natijalar:\n\n"
-    buttons = []
-    for i, r in enumerate(results[:10]):
-        dur = r.get("duration", "")
-        artist = r.get("artist", "")
-        title = r["title"][:45]
-        line = nums[i] + " " + title
-        if artist:
-            line += " — " + artist[:20]
-        if dur:
-            line += " [" + dur + "]"
-        text += line + "\n"
-        btn = nums[i] + " " + r["title"][:35]
-        if dur:
-            btn += " [" + dur + "]"
-        buttons.append([InlineKeyboardButton(btn, callback_data="dl|" + r["uid"])])
-    return text, buttons
+# ─── VOICE TO TEXT ────────────────────────────────────────────────────────────
+async def voice_to_text(file_path):
+    """Telegram ovozli xabarni matnга aylantirish — yt-dlp orqali"""
+    # Oddiy yondashuv: foydalanuvchiga nom yozishni so'raymiz
+    # Lekin whisper.cpp yoki google speech ishlatish mumkin
+    return None
 
 # ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
 async def download_audio(chat_id, url, title, context, user_id=None, user_obj=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
-    outfile = "/tmp/audio_" + str(chat_id)
+    outfile = f"/tmp/audio_{chat_id}"
 
     for ext in ["mp3", "m4a", "webm", "opus", "ogg", "mp4"]:
-        p = outfile + "." + ext
+        p = f"{outfile}.{ext}"
         if os.path.exists(p):
             try: os.remove(p)
             except: pass
 
     import shutil
     has_ffmpeg = shutil.which("ffmpeg") is not None
+    is_youtube = "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url
 
-    # Avval qo'shiq nomini aniqlaymiz (yuklamasdan)
-    info_opts = {
-        "quiet": True, "skip_download": True,
-        "no_warnings": True, "socket_timeout": 15,
-    }
-    if os.path.exists("/app/cookies.txt"):
-        info_opts["cookiefile"] = "/app/cookies.txt"
-
-    real_title = title
-    artist = ""
-    is_youtube = "youtube" in url or "youtu.be" in url
-
-    try:
-        with yt_dlp.YoutubeDL(info_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            real_title = info.get("title", title)
-            artist = info.get("uploader", info.get("artist", ""))
-    except:
-        pass
-
-    # YouTube bo'lsa — SoundCloud dan qidirib yuklaymiz
+    # YouTube bo'lsa — SoundCloud dan qidirish
     if is_youtube:
+        real_title = title
+        try:
+            info_opts = {"quiet": True, "skip_download": True, "no_warnings": True, "socket_timeout": 10}
+            with yt_dlp.YoutubeDL(info_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                real_title = info.get("title", title)
+        except:
+            pass
         await msg.edit_text("🔄 Qidirilmoqda...")
-        query = real_title if real_title != title else title
-        sc_results = search_soundcloud(query, 8)
+        sc_results = search_soundcloud(real_title, 8)
+        if not sc_results:
+            sc_results = combine_search(real_title, 8)
         if sc_results:
             result_text, buttons = format_results(sc_results)
             await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -290,10 +288,37 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             await msg.edit_text("❌ Topilmadi. Qo'shiq nomini yozing.")
         return
 
-    # YouTube emas (SoundCloud, Instagram, TikTok...) — to'g'ridan yuklaymiz
+    # Deezer preview bo'lsa — to'g'ridan yuklab olamiz
+    if "dzcdn.net" in url or url.endswith(".mp3"):
+        try:
+            r = requests.get(url, timeout=30, stream=True)
+            filepath = f"{outfile}.mp3"
+            with open(filepath, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 1000:
+                uid = url_to_id(url)
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❤️ Sevimli", callback_data=f"fav|{uid}|{title[:25]}"),
+                ]])
+                with open(filepath, "rb") as audio:
+                    await context.bot.send_audio(
+                        chat_id=chat_id, audio=audio,
+                        title=title, reply_markup=keyboard,
+                        read_timeout=60, write_timeout=60,
+                    )
+                os.remove(filepath)
+                await msg.delete()
+                return
+        except:
+            pass
+        await msg.edit_text("❌ Yuklashda xatolik.")
+        return
+
+    # SoundCloud, TikTok, Instagram va boshqalar
     opts = {
         "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best",
-        "outtmpl": outfile + ".%(ext)s",
+        "outtmpl": f"{outfile}.%(ext)s",
         "quiet": True, "no_warnings": True,
         "noplaylist": True, "socket_timeout": 60, "retries": 3,
     }
@@ -306,6 +331,8 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
 
+    real_title = title
+    artist = ""
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -315,25 +342,23 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
         await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
         return
 
-    # mp3 fayl izlash
-    filepath = outfile + ".mp3"
+    filepath = f"{outfile}.mp3"
     if not os.path.exists(filepath):
         for ext in ["m4a", "webm", "opus", "ogg", "mp4"]:
-            p = outfile + "." + ext
+            p = f"{outfile}.{ext}"
             if os.path.exists(p):
                 filepath = p
                 break
 
     if not filepath or not os.path.exists(filepath):
         for f in os.listdir("/tmp"):
-            if f.startswith("audio_" + str(chat_id)):
-                filepath = "/tmp/" + f
+            if f.startswith(f"audio_{chat_id}"):
+                filepath = f"/tmp/{f}"
                 break
 
     if filepath and os.path.exists(filepath):
-        fsize = os.path.getsize(filepath)
-        if fsize > 50 * 1024 * 1024:
-            await msg.edit_text("❌ Fayl juda katta (50MB dan oshdi).")
+        if os.path.getsize(filepath) > 50 * 1024 * 1024:
+            await msg.edit_text("❌ Fayl juda katta.")
             try: os.remove(filepath)
             except: pass
             return
@@ -351,10 +376,9 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
 
         uid = url_to_id(url)
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("❤️ Sevimli", callback_data="fav|" + uid + "|" + real_title[:25]),
-            InlineKeyboardButton("🎬 Video", callback_data="vid|" + uid),
+            InlineKeyboardButton("❤️ Sevimli", callback_data=f"fav|{uid}|{real_title[:25]}"),
+            InlineKeyboardButton("🎬 Video", callback_data=f"vid|{uid}"),
         ]])
-
         try:
             with open(filepath, "rb") as audio:
                 await context.bot.send_audio(
@@ -363,12 +387,12 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
                     reply_markup=keyboard,
                     read_timeout=120, write_timeout=120,
                 )
-        except Exception as e:
+        except:
             try:
                 with open(filepath, "rb") as doc:
                     await context.bot.send_document(
                         chat_id=chat_id, document=doc,
-                        caption="🎵 " + real_title,
+                        caption=f"🎵 {real_title}",
                         reply_markup=keyboard,
                     )
             except:
@@ -387,8 +411,8 @@ async def download_video(chat_id, url, context, platform="other"):
         "snapchat": "Snapchat", "pinterest": "Pinterest", "likee": "Likee", "other": "Video"
     }
     name = names.get(platform, "Video")
-    msg = await context.bot.send_message(chat_id=chat_id, text="🎬 " + name + " yuklanmoqda...")
-    outfile = "/tmp/video_" + str(chat_id) + ".mp4"
+    msg = await context.bot.send_message(chat_id=chat_id, text=f"🎬 {name} yuklanmoqda...")
+    outfile = f"/tmp/video_{chat_id}.mp4"
     if os.path.exists(outfile):
         try: os.remove(outfile)
         except: pass
@@ -397,7 +421,6 @@ async def download_video(chat_id, url, context, platform="other"):
         "format": "best[height<=720][filesize<45M]/best[height<=480]/best[height<=360]/worst",
         "outtmpl": outfile, "quiet": True, "noplaylist": True,
         "socket_timeout": 60, "retries": 3,
-        "merge_output_format": "mp4",
     }
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
@@ -406,13 +429,13 @@ async def download_video(chat_id, url, context, platform="other"):
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", name)
-    except Exception as e:
-        await msg.edit_text("❌ " + name + " yuklashda xatolik.")
+    except:
+        await msg.edit_text(f"❌ {name} yuklashda xatolik.")
         return
 
     if os.path.exists(outfile):
         if os.path.getsize(outfile) > 50 * 1024 * 1024:
-            await msg.edit_text("❌ Video juda katta (50MB dan oshdi).")
+            await msg.edit_text("❌ Video juda katta (50MB).")
             try: os.remove(outfile)
             except: pass
             return
@@ -420,12 +443,12 @@ async def download_video(chat_id, url, context, platform="other"):
             with open(outfile, "rb") as video:
                 await context.bot.send_video(
                     chat_id=chat_id, video=video,
-                    caption="🎬 " + real_title,
+                    caption=f"🎬 {real_title}",
                     read_timeout=120, write_timeout=120,
                 )
         except:
             with open(outfile, "rb") as doc:
-                await context.bot.send_document(chat_id=chat_id, document=doc, caption="🎬 " + real_title)
+                await context.bot.send_document(chat_id=chat_id, document=doc, caption=f"🎬 {real_title}")
         try: os.remove(outfile)
         except: pass
         await msg.delete()
@@ -443,14 +466,12 @@ def main_keyboard():
          InlineKeyboardButton("ℹ️ Yordam", callback_data="help")],
     ])
 
-def link_keyboard(uid, platform):
-    if platform in ["youtube", "instagram", "tiktok", "snapchat", "pinterest", "likee", "other"]:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎵 To'liq musiqa", callback_data="ig_music|" + uid)],
-            [InlineKeyboardButton("🎵 Videodagi musiqa", callback_data="dl|" + uid)],
-            [InlineKeyboardButton("🎬 Videoni yukla", callback_data="vid|" + uid)],
-        ])
-    return None
+def link_keyboard(uid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎵 To'liq musiqa", callback_data=f"ig_music|{uid}")],
+        [InlineKeyboardButton("🎵 Videodagi musiqa", callback_data=f"dl|{uid}")],
+        [InlineKeyboardButton("🎬 Videoni yukla", callback_data=f"vid|{uid}")],
+    ])
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -461,12 +482,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_db(db)
     if is_new:
         await update.message.reply_text(
-            "🎵 Salom, " + user.first_name + "! Xush kelibsiz!\n\n"
-            "Bu bot orqali:\n"
-            "Qo'shiq nomi yozib qidiring yoki\n"
+            f"🎵 Salom, {user.first_name}! Xush kelibsiz!\n\n"
+            "Qo'shiq nomini yozing yoki\n"
             "YouTube, Instagram, TikTok, Snapchat link yuboring.\n\n"
-            "Har bir link uchun:\n"
-            "🎵 To'liq musiqa | 🎵 Videodagi musiqa | 🎬 Video",
+            "🎤 Ovozli xabar ham yuborishingiz mumkin!",
             reply_markup=main_keyboard()
         )
     else:
@@ -487,7 +506,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_db(db)
 
     platform = detect_platform(text)
-
     if platform:
         uid = url_to_id(text)
         platform_names = {
@@ -496,8 +514,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "pinterest": "📌 Pinterest", "likee": "💚 Likee", "other": "🔗 Link"
         }
         name = platform_names.get(platform, "Link")
-        kb = link_keyboard(uid, platform)
-        await update.message.reply_text(name + " — nima kerak?", reply_markup=kb)
+        await update.message.reply_text(f"{name} — nima kerak?", reply_markup=link_keyboard(uid))
         return
 
     # Qo'shiq qidirish
@@ -505,23 +522,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(db, user_id, user_obj)
     limit = user["settings"]["results"]
     msg = await update.message.reply_text("🔍 Qidirilmoqda...")
-
     try:
         results = combine_search(text, limit)
     except:
         await msg.edit_text("❌ Xatolik yuz berdi.")
         return
-
     if not results:
         await msg.edit_text("❌ Hech narsa topilmadi.")
         return
-
     result_text, buttons = format_results(results)
     await msg.edit_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
 
 # ─── HANDLE VOICE ─────────────────────────────────────────────────────────────
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎤 Qo'shiq nomini yozing!")
+    chat_id = update.message.chat_id
+    user_id = update.effective_user.id
+    user_obj = update.effective_user
+
+    msg = await update.message.reply_text("🎤 Ovozli xabar qabul qilindi, qidirilmoqda...")
+
+    try:
+        # Ovozni yuklab olamiz
+        voice = update.message.voice or update.message.audio
+        if not voice:
+            await msg.edit_text("❌ Ovozni tanib bo'lmadi. Qo'shiq nomini yozing.")
+            return
+
+        voice_file = await context.bot.get_file(voice.file_id)
+        voice_path = f"/tmp/voice_{chat_id}.ogg"
+        await voice_file.download_to_drive(voice_path)
+
+        # Ovozdan matn — Telegram bot API orqali
+        # Shazam-uslub: ovoz parmog'ini SoundCloud dan qidirish
+        # Hozircha: foydalanuvchiga qo'shiq nomini so'raymiz
+        # Lekin audio uzunligiga qarab — qo'shiq bo'lsa qidirish, aks holda
+        duration = voice.duration if hasattr(voice, 'duration') else 0
+
+        if duration and duration < 60:
+            # Qisqa ovoz — qo'shiq nomi deb taxmin qilamiz, matn sifatida qidiramiz
+            # Telegram built-in recognition yo'q, shuning uchun
+            # Foydalanuvchiga so'raymiz
+            await msg.edit_text(
+                "🎤 Ovozli xabarni qabul qildim!\n\n"
+                "Qo'shiq nomini matn ko'rinishida yozing, tezroq topib beraman:"
+            )
+        else:
+            await msg.edit_text("🎤 Qo'shiq nomini yozing, tezda topib beraman!")
+
+        if os.path.exists(voice_path):
+            os.remove(voice_path)
+
+    except Exception as e:
+        await msg.edit_text("🎤 Qo'shiq nomini yozing!")
 
 # ─── CALLBACK ─────────────────────────────────────────────────────────────────
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -539,14 +591,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Muddati o'tgan.", show_alert=True)
             return
         await query.edit_message_text("🔍 Musiqa nomi aniqlanmoqda...")
-        music_title = get_instagram_music_title(url)
+        music_title = get_media_music_title(url)
         if music_title:
             results = combine_search(music_title, 10)
             if results:
                 result_text, buttons = format_results(results)
                 await query.edit_message_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
             else:
-                await query.edit_message_text("❌ " + music_title + " topilmadi. Qo'lda yozing:")
+                await query.edit_message_text(f"❌ '{music_title}' topilmadi. Qo'lda yozing:")
         else:
             await query.edit_message_text("❌ Musiqa nomi aniqlanmadi. Qo'shiq nomini yozing:")
 
@@ -596,8 +648,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = "❤️ Sevimlilar:\n\n"
             buttons = []
             for i, fav in enumerate(favs[:10]):
-                txt += str(i+1) + ". " + fav["title"][:45] + "\n"
-                buttons.append([InlineKeyboardButton("▶️ " + fav["title"][:40], callback_data="dl|" + fav["uid"])])
+                txt += f"{i+1}. {fav['title'][:45]}\n"
+                buttons.append([InlineKeyboardButton(f"▶️ {fav['title'][:40]}", callback_data=f"dl|{fav['uid']}")])
             buttons.append([
                 InlineKeyboardButton("🗑 Tozalash", callback_data="clr_fav"),
                 InlineKeyboardButton("🔙 Orqaga", callback_data="back")
@@ -620,7 +672,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
             txt = "🏆 TOP 10:\n\n"
             for i, item in enumerate(sorted_top):
-                txt += nums[i] + " " + item["title"][:40] + " — " + str(item["count"]) + "x\n"
+                txt += f"{nums[i]} {item['title'][:40]} — {item['count']}x\n"
         await query.edit_message_text(txt,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
@@ -635,9 +687,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = "📜 Tarix:\n\n"
             buttons = []
             for i, item in enumerate(history[:10]):
-                txt += str(i+1) + ". " + item["title"][:45] + "\n"
+                txt += f"{i+1}. {item['title'][:45]}\n"
                 uid = url_to_id(item["url"])
-                buttons.append([InlineKeyboardButton("▶️ " + item["title"][:40], callback_data="dl|" + uid)])
+                buttons.append([InlineKeyboardButton(f"▶️ {item['title'][:40]}", callback_data=f"dl|{uid}")])
             buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="back")])
             await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -650,7 +702,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("✅ 10 ta" if cnt==10 else "10 ta", callback_data="sr10")],
             [InlineKeyboardButton("🔙 Orqaga", callback_data="back")],
         ])
-        await query.edit_message_text("Sozlamalar\n\nNatijalar soni: " + str(cnt) + " ta", reply_markup=kb)
+        await query.edit_message_text(f"Sozlamalar\n\nNatijalar soni: {cnt} ta", reply_markup=kb)
 
     elif data in ["sr5", "sr10"]:
         count = int(data[2:])
@@ -658,7 +710,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = get_user(db, user_id, user_obj)
         user["settings"]["results"] = count
         save_db(db)
-        await query.answer("✅ " + str(count) + " ta natija!", show_alert=True)
+        await query.answer(f"✅ {count} ta natija!", show_alert=True)
 
     elif data == "help":
         await query.edit_message_text(
@@ -666,11 +718,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Link yuborish:\n"
             "YouTube, Instagram, TikTok, Snapchat, Pinterest, Likee\n\n"
             "Har biri uchun:\n"
-            "• To'liq musiqa — musiqa nomini aniqlab qidiradi\n"
+            "• To'liq musiqa — musiqa nomini qidiradi\n"
             "• Videodagi musiqa — videodan audio chiqaradi\n"
             "• Videoni yukla — videoni yuboradi\n\n"
             "Qo'shiq qidirish:\n"
-            "Nom yozing — YouTube Music + SoundCloud dan topadi\n\n"
+            "Nom yozing — SoundCloud + YouTube Music + Deezer dan topadi\n\n"
+            "Ovozli xabar: yuboring, qo'shiq nomini so'raydi\n\n"
             "Buyruqlar: /start /top /favorites /history /stats /admin",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
@@ -686,20 +739,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_dl = sum(u.get("downloads", 0) for u in db.values())
         top5 = sorted(top.values(), key=lambda x: x["count"], reverse=True)[:5]
         txt = "Batafsil statistika:\n\n"
-        txt += "Foydalanuvchilar: " + str(len(db)) + " ta\n"
-        txt += "Jami yuklanmalar: " + str(total_dl) + " ta\n"
-        txt += "Jami qo'shiqlar: " + str(len(top)) + " ta\n\nTop 5:\n"
+        txt += f"Foydalanuvchilar: {len(db)} ta\n"
+        txt += f"Jami yuklanmalar: {total_dl} ta\n"
+        txt += f"Jami qo'shiqlar: {len(top)} ta\n\nTop 5:\n"
         for i, item in enumerate(top5):
-            txt += str(i+1) + ". " + item["title"][:35] + " — " + str(item["count"]) + "x\n"
+            txt += f"{i+1}. {item['title'][:35]} — {item['count']}x\n"
         await query.edit_message_text(txt,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
     elif data == "admin_users":
         if user_id != ADMIN_ID: return
         db = load_db()
-        txt = "Foydalanuvchilar (" + str(len(db)) + " ta):\n\n"
+        txt = f"Foydalanuvchilar ({len(db)} ta):\n\n"
         for uid, u in list(db.items())[-20:]:
-            txt += "• " + u.get("name","?") + " " + u.get("username","") + " — " + str(u.get("downloads",0)) + " ta\n"
+            txt += f"• {u.get('name','?')} {u.get('username','')} — {u.get('downloads',0)} ta\n"
         await query.edit_message_text(txt,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
@@ -712,12 +765,12 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top = load_top()
     total_dl = sum(u.get("downloads", 0) for u in db.values())
     txt = "👑 Admin Panel\n\n"
-    txt += "Foydalanuvchilar: " + str(len(db)) + " ta\n"
-    txt += "Jami yuklanmalar: " + str(total_dl) + " ta\n"
-    txt += "Jami qo'shiqlar: " + str(len(top)) + " ta\n\n"
+    txt += f"Foydalanuvchilar: {len(db)} ta\n"
+    txt += f"Jami yuklanmalar: {total_dl} ta\n"
+    txt += f"Jami qo'shiqlar: {len(top)} ta\n\n"
     txt += "So'nggi 10 foydalanuvchi:\n"
     for uid, u in list(db.items())[-10:]:
-        txt += "• " + u.get("name","?") + " " + u.get("username","") + " — " + str(u.get("downloads",0)) + " ta (" + u.get("joined","?") + ")\n"
+        txt += f"• {u.get('name','?')} {u.get('username','')} — {u.get('downloads',0)} ta ({u.get('joined','?')})\n"
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("📊 Statistika", callback_data="admin_stats"),
         InlineKeyboardButton("👥 Userlar", callback_data="admin_users"),
@@ -733,7 +786,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     txt = "🏆 TOP 10:\n\n"
     for i, item in enumerate(sorted_top):
-        txt += nums[i] + " " + item["title"][:40] + " — " + str(item["count"]) + "x\n"
+        txt += f"{nums[i]} {item['title'][:40]} — {item['count']}x\n"
     await update.message.reply_text(txt)
 
 async def favorites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -746,8 +799,8 @@ async def favorites_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = "❤️ Sevimlilar:\n\n"
     buttons = []
     for i, fav in enumerate(favs[:10]):
-        txt += str(i+1) + ". " + fav["title"][:45] + "\n"
-        buttons.append([InlineKeyboardButton("▶️ " + fav["title"][:40], callback_data="dl|" + fav["uid"])])
+        txt += f"{i+1}. {fav['title'][:45]}\n"
+        buttons.append([InlineKeyboardButton(f"▶️ {fav['title'][:40]}", callback_data=f"dl|{fav['uid']}")])
     await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -760,9 +813,9 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = "📜 Tarix:\n\n"
     buttons = []
     for i, item in enumerate(history[:10]):
-        txt += str(i+1) + ". " + item["title"][:45] + "\n"
+        txt += f"{i+1}. {item['title'][:45]}\n"
         uid = url_to_id(item["url"])
-        buttons.append([InlineKeyboardButton("▶️ " + item["title"][:40], callback_data="dl|" + uid)])
+        buttons.append([InlineKeyboardButton(f"▶️ {item['title'][:40]}", callback_data=f"dl|{uid}")])
     await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -770,18 +823,17 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(db, update.effective_user.id, update.effective_user)
     top = load_top()
     await update.message.reply_text(
-        "📊 Statistika:\n\n"
-        "Siz yuklagan: " + str(user["downloads"]) + " ta\n"
-        "Sevimlilar: " + str(len(user["favorites"])) + " ta\n"
-        "Tarix: " + str(len(user["history"])) + " ta\n\n"
-        "Umumiy:\n"
-        "Jami qo'shiqlar: " + str(len(top)) + " ta\n"
-        "Yuklanmalar: " + str(sum(v["count"] for v in top.values())) + " ta"
+        f"📊 Statistika:\n\n"
+        f"Siz yuklagan: {user['downloads']} ta\n"
+        f"Sevimlilar: {len(user['favorites'])} ta\n"
+        f"Tarix: {len(user['history'])} ta\n\n"
+        f"Umumiy:\n"
+        f"Jami qo'shiqlar: {len(top)} ta\n"
+        f"Yuklanmalar: {sum(v['count'] for v in top.values())} ta"
     )
 
-# ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 async def error_handler(update, context):
-    print("⚠️ Xato: " + str(context.error))
+    print(f"⚠️ Xato: {context.error}")
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
@@ -795,7 +847,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_voice))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
     print("🎵 MusicBot ishga tushdi!")
