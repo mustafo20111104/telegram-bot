@@ -18,14 +18,36 @@ ADMIN_ID = 6705765282
 URL_CACHE = {}
 DB_FILE = "/tmp/users.json"
 TOP_FILE = "/tmp/top.json"
+CACHE_FILE = "/tmp/url_cache.json"
 
 # ─── UTILS ────────────────────────────────────────────────────────────────────
+def load_cache():
+    global URL_CACHE
+    try:
+        if os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE) as f:
+                URL_CACHE = json.load(f)
+    except:
+        URL_CACHE = {}
+
+def save_cache():
+    try:
+        # Faqat oxirgi 2000 ta URL ni saqlash
+        items = list(URL_CACHE.items())[-2000:]
+        with open(CACHE_FILE, "w") as f:
+            json.dump(dict(items), f)
+    except:
+        pass
+
 def url_to_id(url):
     uid = hashlib.md5(url.encode()).hexdigest()[:12]
     URL_CACHE[uid] = url
+    save_cache()
     return uid
 
 def id_to_url(uid):
+    if uid not in URL_CACHE:
+        load_cache()
     return URL_CACHE.get(uid, "")
 
 def fmt_dur(seconds):
@@ -1008,6 +1030,7 @@ async def error_handler(update, context):
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
+    load_cache()  # URL cache ni yuklash
     app = (ApplicationBuilder().token(TOKEN)
         .read_timeout(120).write_timeout(120)
         .connect_timeout(60).pool_timeout(60).build())
