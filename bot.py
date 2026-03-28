@@ -253,6 +253,110 @@ async def voice_to_text(file_path):
     return None
 
 # ─── DOWNLOAD AUDIO ───────────────────────────────────────────────────────────
+async def download_audio_direct(chat_id, url, title, context, user_id=None, user_obj=None):
+    """Videodagi ovozni to'g'ridan yuklab beradi - YouTube qo'llanmaydi"""
+    msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Videodagi musiqa yuklanmoqda...")
+    outfile = f"/tmp/igaudio_{chat_id}"
+
+    for ext in ["mp3", "m4a", "webm", "opus", "ogg", "mp4"]:
+        p = f"{outfile}.{ext}"
+        if os.path.exists(p):
+            try: os.remove(p)
+            except: pass
+
+    import shutil
+    has_ffmpeg = shutil.which("ffmpeg") is not None
+
+    opts = {
+        "format": "bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": f"{outfile}.%(ext)s",
+        "quiet": True, "no_warnings": True,
+        "noplaylist": True, "socket_timeout": 60, "retries": 3,
+    }
+    if has_ffmpeg:
+        opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }]
+    if os.path.exists("/app/cookies.txt"):
+        opts["cookiefile"] = "/app/cookies.txt"
+
+    real_title = title
+    artist = ""
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            # Asl musiqa nomi — track > title
+            track = info.get("track", "")
+            art = info.get("artist", "")
+            if track:
+                real_title = track
+                artist = art
+            else:
+                real_title = info.get("title", title)
+                artist = info.get("uploader", art)
+    except Exception as e:
+        await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
+        return
+
+    filepath = f"{outfile}.mp3"
+    if not os.path.exists(filepath):
+        for ext in ["m4a", "webm", "opus", "ogg", "mp4"]:
+            p = f"{outfile}.{ext}"
+            if os.path.exists(p):
+                filepath = p
+                break
+
+    if not filepath or not os.path.exists(filepath):
+        for f in os.listdir("/tmp"):
+            if f.startswith(f"igaudio_{chat_id}"):
+                filepath = f"/tmp/{f}"
+                break
+
+    if filepath and os.path.exists(filepath):
+        if os.path.getsize(filepath) > 50 * 1024 * 1024:
+            await msg.edit_text("❌ Fayl juda katta.")
+            try: os.remove(filepath)
+            except: pass
+            return
+
+        increment_top(real_title, url)
+        if user_id:
+            db = load_db()
+            user = get_user(db, user_id, user_obj)
+            user["downloads"] += 1
+            h = {"title": real_title, "url": url}
+            if h not in user["history"]:
+                user["history"].insert(0, h)
+                user["history"] = user["history"][:20]
+            save_db(db)
+
+        uid = url_to_id(url)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❤️ Sevimli", callback_data=f"fav|{uid}|{real_title[:25]}"),
+        ]])
+        try:
+            with open(filepath, "rb") as audio:
+                await context.bot.send_audio(
+                    chat_id=chat_id, audio=audio,
+                    title=real_title, performer=artist,
+                    reply_markup=keyboard,
+                    read_timeout=120, write_timeout=120,
+                )
+        except:
+            with open(filepath, "rb") as doc:
+                await context.bot.send_document(
+                    chat_id=chat_id, document=doc,
+                    caption=f"🎵 {real_title}",
+                    reply_markup=keyboard,
+                )
+        try: os.remove(filepath)
+        except: pass
+        await msg.delete()
+    else:
+        await msg.edit_text("❌ Fayl topilmadi.")
+
 async def download_audio(chat_id, url, title, context, user_id=None, user_obj=None):
     msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Yuklanmoqda...")
     outfile = f"/tmp/audio_{chat_id}"
@@ -336,8 +440,15 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            real_title = info.get("title", title)
-            artist = info.get("uploader", info.get("artist", ""))
+            # Asl musiqa nomi — track > title
+            track = info.get("track", "")
+            art = info.get("artist", "")
+            if track:
+                real_title = track
+                artist = art
+            else:
+                real_title = info.get("title", title)
+                artist = info.get("uploader", art)
     except Exception as e:
         await msg.edit_text("❌ Yuklashda xatolik. Qayta urining.")
         return
@@ -412,44 +523,95 @@ async def download_video(chat_id, url, context, platform="other"):
     }
     name = names.get(platform, "Video")
     msg = await context.bot.send_message(chat_id=chat_id, text=f"🎬 {name} yuklanmoqda...")
-    outfile = f"/tmp/video_{chat_id}.mp4"
-    if os.path.exists(outfile):
-        try: os.remove(outfile)
-        except: pass
+    outfile = f"/tmp/video_{chat_id}"
+
+    # Eski fayllarni tozalash
+    for ext in ["mp4", "webm", "mkv", "mov"]:
+        p = f"{outfile}.{ext}"
+        if os.path.exists(p):
+            try: os.remove(p)
+            except: pass
 
     opts = {
-        "format": "best[height<=720][filesize<45M]/best[height<=480]/best[height<=360]/worst",
-        "outtmpl": outfile, "quiet": True, "noplaylist": True,
-        "socket_timeout": 60, "retries": 3,
+        "format": "best[ext=mp4][height<=720]/best[height<=720]/best[height<=480]/best",
+        "outtmpl": outfile + ".%(ext)s",
+        "quiet": True, "noplaylist": True,
+        "socket_timeout": 60, "retries": 5,
+        "no_warnings": True,
     }
+
+    # Instagram uchun maxsus sozlamalar
+    if platform == "instagram":
+        opts["http_headers"] = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
 
+    real_title = name
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             real_title = info.get("title", name)
-    except:
-        await msg.edit_text(f"❌ {name} yuklashda xatolik.")
-        return
+    except Exception as e:
+        # Ikkinchi urinish — boshqa format bilan
+        opts2 = {
+            "format": "worst",
+            "outtmpl": outfile + ".%(ext)s",
+            "quiet": True, "noplaylist": True,
+            "socket_timeout": 60, "retries": 3,
+            "no_warnings": True,
+        }
+        if platform == "instagram":
+            opts2["http_headers"] = {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+            }
+        if os.path.exists("/app/cookies.txt"):
+            opts2["cookiefile"] = "/app/cookies.txt"
+        try:
+            with yt_dlp.YoutubeDL(opts2) as ydl:
+                info = ydl.extract_info(url, download=True)
+                real_title = info.get("title", name)
+        except:
+            await msg.edit_text(f"❌ {name} yuklab bo'lmadi. Link ochiq ekanligini tekshiring.")
+            return
 
-    if os.path.exists(outfile):
-        if os.path.getsize(outfile) > 50 * 1024 * 1024:
+    # Yuklangan faylni topish
+    filepath = None
+    for ext in ["mp4", "webm", "mkv", "mov", "avi"]:
+        p = f"{outfile}.{ext}"
+        if os.path.exists(p):
+            filepath = p
+            break
+    if not filepath:
+        for f in os.listdir("/tmp"):
+            if f.startswith(f"video_{chat_id}"):
+                filepath = f"/tmp/{f}"
+                break
+
+    if filepath and os.path.exists(filepath):
+        if os.path.getsize(filepath) > 50 * 1024 * 1024:
             await msg.edit_text("❌ Video juda katta (50MB).")
-            try: os.remove(outfile)
+            try: os.remove(filepath)
             except: pass
             return
         try:
-            with open(outfile, "rb") as video:
+            with open(filepath, "rb") as video:
                 await context.bot.send_video(
                     chat_id=chat_id, video=video,
                     caption=f"🎬 {real_title}",
                     read_timeout=120, write_timeout=120,
+                    supports_streaming=True,
                 )
         except:
-            with open(outfile, "rb") as doc:
-                await context.bot.send_document(chat_id=chat_id, document=doc, caption=f"🎬 {real_title}")
-        try: os.remove(outfile)
+            with open(filepath, "rb") as doc:
+                await context.bot.send_document(
+                    chat_id=chat_id, document=doc,
+                    caption=f"🎬 {real_title}",
+                )
+        try: os.remove(filepath)
         except: pass
         await msg.delete()
     else:
@@ -469,7 +631,7 @@ def main_keyboard():
 def link_keyboard(uid):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎵 To'liq musiqa", callback_data=f"ig_music|{uid}")],
-        [InlineKeyboardButton("🎵 Videodagi musiqa", callback_data=f"dl|{uid}")],
+        [InlineKeyboardButton("🎵 Videodagi musiqa", callback_data=f"igdl|{uid}")],
         [InlineKeyboardButton("🎬 Videoni yukla", callback_data=f"vid|{uid}")],
     ])
 
@@ -601,6 +763,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(f"❌ '{music_title}' topilmadi. Qo'lda yozing:")
         else:
             await query.edit_message_text("❌ Musiqa nomi aniqlanmadi. Qo'shiq nomini yozing:")
+
+    elif data.startswith("igdl|"):
+        # Videodagi ovozni to'g'ridan yuklab beradi (Instagram, TikTok...)
+        uid = data.split("|")[1]
+        url = id_to_url(uid)
+        if not url:
+            await query.answer("❌ Muddati o'tgan.", show_alert=True)
+            return
+        await download_audio_direct(chat_id, url, "Musiqa", context, user_id, user_obj)
 
     elif data.startswith("dl|"):
         uid = data.split("|")[1]
@@ -855,7 +1026,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
