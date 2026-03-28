@@ -253,17 +253,50 @@ def format_results(results):
 
 # ─── INSTAGRAM MUSIC ──────────────────────────────────────────────────────────
 def get_media_music_title(url):
-    opts = {"quiet": True, "skip_download": True, "no_warnings": True, "socket_timeout": 15}
+    """Video URL dan musiqa nomini olish — track > artist+music > title"""
+    opts = {
+        "quiet": True, "skip_download": True,
+        "no_warnings": True, "socket_timeout": 20,
+    }
     if os.path.exists("/app/cookies.txt"):
         opts["cookiefile"] = "/app/cookies.txt"
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            music = info.get("track") or info.get("music") or info.get("title", "")
+
+            # 1. track meta — eng aniq
+            track = info.get("track", "")
             artist = info.get("artist", "")
-            if artist and music and artist not in music:
-                return f"{artist} - {music}"
-            return music or info.get("title", "")
+            if track and artist:
+                return f"{artist} - {track}"
+            if track:
+                return track
+
+            # 2. music meta
+            music = info.get("music", [])
+            if isinstance(music, list) and music:
+                m = music[0]
+                song = m.get("song", "")
+                art = m.get("artist", "")
+                if song and art:
+                    return f"{art} - {song}"
+                if song:
+                    return song
+
+            # 3. description dan musiqa nomini qidirish
+            desc = info.get("description", "")
+            if desc:
+                for line in desc.splitlines():
+                    line = line.strip()
+                    low = line.lower()
+                    if "music:" in low or "song:" in low or "audio:" in low or "track:" in low:
+                        clean = line.split(":", 1)[-1].strip()
+                        if clean and len(clean) > 3:
+                            return clean
+
+            # 4. title dan foydalanish
+            title = info.get("title", "")
+            return title
     except:
         return ""
 
@@ -774,17 +807,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url:
             await query.answer("❌ Muddati o'tgan.", show_alert=True)
             return
-        await query.edit_message_text("🔍 Musiqa nomi aniqlanmoqda...")
+        await query.edit_message_text("🔍 Musiqa qidirilmoqda...")
         music_title = get_media_music_title(url)
-        if music_title:
+
+        # Musiqa nomi bo'lsa — qidirish
+        if music_title and len(music_title) > 2:
             results = combine_search(music_title, 10)
             if results:
                 result_text, buttons = format_results(results)
-                await query.edit_message_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
-            else:
-                await query.edit_message_text(f"❌ '{music_title}' topilmadi. Qo'lda yozing:")
-        else:
-            await query.edit_message_text("❌ Musiqa nomi aniqlanmadi. Qo'shiq nomini yozing:")
+                final_text = "🎵 " + music_title + " natijalari:\n\n" + result_text.replace("🎵 Natijalar:\n\n", "")
+                await query.edit_message_text(
+                    final_text,
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                return
+
+        # Musiqa nomi topilmasa — foydalanuvchiga so'rash
+        await query.edit_message_text(
+            "Videodagi musiqa nomi aniqlanmadi. Qoshiq nomini yozing:"
+        )
 
     elif data.startswith("igdl|"):
         # Videodagi ovozni to'g'ridan yuklab beradi (Instagram, TikTok...)
