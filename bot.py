@@ -24,8 +24,8 @@ TOKEN = os.environ.get("BOT_TOKEN")          # Tokenni environment'dan o‘qing!
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment o‘zgaruvchisi o‘rnatilmagan")
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 6705765282))  # O‘z ID-ngizni yozing
-YT_API_KEY = os.environ.get("YT_API_KEY", "")           # Agar kerak bo‘lsa (hozir ishlatilmayapti)
+ADMIN_ID = int(os.environ.get 6705765282  
+YT_API_KEY = os.environ.get "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"          
 
 # Papkalar
 DOWNLOAD_DIR = "/tmp/musicbot_downloads"     # Vaqtinchalik fayllar
