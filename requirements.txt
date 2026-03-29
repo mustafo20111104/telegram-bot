@@ -1,3 +1,7 @@
-python-telegram-bot==21.0.1
-yt-dlp
-requests
+python-telegram-bot==20.7
+yt-dlp>=2024.3.10
+requests==2.31.0
+eyed3==0.9.7
+shazamio==0.2.0
+pydub==0.25.1
+aiohttp==3.9.3
