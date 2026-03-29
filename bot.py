@@ -8,6 +8,7 @@ import hashlib
 import asyncio
 import subprocess
 import shutil
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -19,22 +20,27 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters,
 )
 
-# -------------------- KONFIGURATSIYA (xavfsiz) --------------------
-TOKEN = "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"
-ADMIN_ID = 6705765282
-YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"
+# -------------------- KONFIGURATSIYA (o‘zgartirish kerak bo‘lgan qism) --------------------
+TOKEN = "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"          # Tokeningiz
+ADMIN_ID = 6705765282                                             # Telegram ID
+YT_API_KEY = "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg"           # YouTube API (ixtiyoriy)
+
+# 🔻 PROXY URL - shu yerga websharedan olgan proxyingizni yozing
+PROXY_URL = "http://USERNAME:PASSWORD@31.59.20.176:PORT"  # O‘zgartiring!
+
+# Agar proxy kerak bo‘lmasa, quyidagi qatorni o‘chirib qo‘ying yoki "" qilib qo‘ying
+# PROXY_URL = ""
+
 # Papkalar
-DOWNLOAD_DIR = "/tmp/musicbot_downloads"     # Vaqtinchalik fayllar
+DOWNLOAD_DIR = "/tmp/musicbot_downloads"
 Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
 
-# Fayl yo‘llari
 DB_FILE = os.path.join(DOWNLOAD_DIR, "users.json")
 TOP_FILE = os.path.join(DOWNLOAD_DIR, "top.json")
 CACHE_FILE = os.path.join(DOWNLOAD_DIR, "url_cache.json")
 
-# Global o‘zgaruvchilar
 URL_CACHE = {}
-DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)   # Maksimal 3 ta parallel yuklab olish
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 # -------------------- YORDAMCHI FUNKSIYALAR --------------------
 def load_cache():
@@ -48,7 +54,7 @@ def load_cache():
 
 def save_cache():
     try:
-        items = list(URL_CACHE.items())[-3000:]   # Faqat oxirgi 3000 ta
+        items = list(URL_CACHE.items())[-3000:]
         with open(CACHE_FILE, "w") as f:
             json.dump(dict(items), f)
     except:
@@ -68,18 +74,14 @@ def id_to_url(uid):
 def fmt_dur(seconds):
     try:
         s = int(float(seconds))
-        if s <= 0:
-            return ""
+        if s <= 0: return ""
         m, s = divmod(s, 60)
         h, m = divmod(m, 60)
-        if h:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
     except:
         return ""
 
 def get_audio_duration(file_path):
-    """FFprobe yordamida audio davomiyligini sekundlarda olish"""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -91,32 +93,21 @@ def get_audio_duration(file_path):
         return 0
 
 def compress_audio(input_path, output_path, target_size_mb=48):
-    """Agar fayl target_size_mb dan katta bo‘lsa, bitrate pasaytirib siqadi"""
     current_size = os.path.getsize(input_path) / (1024 * 1024)
     if current_size <= target_size_mb:
         shutil.copy2(input_path, output_path)
         return output_path
-
     duration = get_audio_duration(input_path)
     if duration <= 0:
         shutil.copy2(input_path, output_path)
         return output_path
-
-    # Bitrate = (target_size_mb * 8 * 1024) / duration (kbps)
     target_bitrate = int((target_size_mb * 8 * 1024) / duration)
-    target_bitrate = max(32, min(192, target_bitrate))   # 32-192 kbps oralig‘i
-
-    cmd = [
-        "ffmpeg", "-i", input_path,
-        "-b:a", f"{target_bitrate}k",
-        "-ac", "2", "-ar", "44100",
-        "-y", output_path
-    ]
+    target_bitrate = max(32, min(192, target_bitrate))
+    cmd = ["ffmpeg", "-i", input_path, "-b:a", f"{target_bitrate}k", "-ac", "2", "-ar", "44100", "-y", output_path]
     subprocess.run(cmd, capture_output=True)
     return output_path
 
 def add_metadata(file_path, title, artist, album="Music Bot", cover_url=None):
-    """MP3 faylga ID3 taglar qo‘shish (agar eyed3 o‘rnatilgan bo‘lsa)"""
     try:
         import eyed3
         audiofile = eyed3.load(file_path)
@@ -134,9 +125,9 @@ def add_metadata(file_path, title, artist, album="Music Bot", cover_url=None):
                 pass
         audiofile.tag.save()
     except ImportError:
-        pass  # eyed3 o‘rnatilmagan bo‘lsa, hech narsa qilma
+        pass
 
-# -------------------- DATABASE (JSON) --------------------
+# -------------------- DATABASE --------------------
 def load_db():
     try:
         if os.path.exists(DB_FILE):
@@ -202,8 +193,7 @@ def detect_platform(url):
 
 # -------------------- QIDIRUV FUNKSIYALARI --------------------
 def search_soundcloud(query, limit=10):
-    opts = {"quiet": True, "skip_download": True, "extract_flat": True,
-            "no_warnings": True, "socket_timeout": 15}
+    opts = {"quiet": True, "skip_download": True, "extract_flat": True, "no_warnings": True, "socket_timeout": 15}
     results = []
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -230,8 +220,7 @@ def search_soundcloud(query, limit=10):
     return results
 
 def search_youtube_music(query, limit=10):
-    opts = {"quiet": True, "skip_download": True, "extract_flat": True,
-            "no_warnings": True, "socket_timeout": 15}
+    opts = {"quiet": True, "skip_download": True, "extract_flat": True, "no_warnings": True, "socket_timeout": 15}
     results = []
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -258,8 +247,7 @@ def search_youtube_music(query, limit=10):
 def search_deezer(query, limit=10):
     results = []
     try:
-        res = requests.get("https://api.deezer.com/search",
-                           params={"q": query, "limit": limit}, timeout=8)
+        res = requests.get("https://api.deezer.com/search", params={"q": query, "limit": limit}, timeout=8)
         for item in res.json().get("data", []):
             preview = item.get("preview")
             if not preview: continue
@@ -288,7 +276,6 @@ def combine_search(query, limit=10):
             combined.append(r)
     return combined[:limit]
 
-# -------------------- FORMATLASH --------------------
 def format_results(results, title=""):
     nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     header = f"🎵 {title} natijalari:\n\n" if title else "🎵 Natijalar:\n\n"
@@ -313,6 +300,8 @@ def format_results(results, title=""):
 # -------------------- VIDEO MUSIQA NOMINI OLISH --------------------
 def get_media_music_title(url):
     opts = {"quiet": True, "skip_download": True, "no_warnings": True, "socket_timeout": 20}
+    if PROXY_URL:
+        opts["proxy"] = PROXY_URL
     cookies = "/app/cookies.txt"
     if os.path.exists(cookies):
         opts["cookiefile"] = cookies
@@ -343,12 +332,37 @@ def get_media_music_title(url):
     except:
         return ""
 
-# -------------------- YUKLAB OLISH (SEMAFOR BILAN) --------------------
+# -------------------- OVOZLI XABARDAN MUSIQA ANIQLASH (Shazam) --------------------
+async def recognize_voice(file_path):
+    """Shazam orqali ovozli fayldan musiqa aniqlaydi"""
+    try:
+        from shazamio import Shazam
+        from pydub import AudioSegment
+    except ImportError:
+        return None, "Shazam kutubxonasi o‘rnatilmagan"
+
+    try:
+        # OGG ni WAV ga o‘tkazish
+        audio = AudioSegment.from_ogg(file_path)
+        wav_path = file_path.replace(".ogg", ".wav")
+        audio.export(wav_path, format="wav")
+        with open(wav_path, "rb") as f:
+            shazam = Shazam()
+            result = await shazam.recognize_song(f.read())
+        os.remove(wav_path)
+        if result and "track" in result:
+            track = result["track"]
+            title = track.get("title", "")
+            artist = track.get("subtitle", "")
+            return f"{artist} - {title}" if artist and title else title or artist, None
+        return None, "Hech narsa topilmadi"
+    except Exception as e:
+        return None, str(e)
+
+# -------------------- YUKLAB OLISH (PROXY BILAN) --------------------
 async def download_audio(chat_id, url, title, context, user_id=None, user_obj=None):
     async with DOWNLOAD_SEMAPHORE:
-        msg = await context.bot.send_message(chat_id, "⏳ Yuklanmoqda (semafor: 3 tagacha)...")
-
-        # Vaqtinchalik fayl nomi
+        msg = await context.bot.send_message(chat_id, "⏳ Yuklanmoqda...")
         outfile = f"/tmp/audio_{chat_id}_{int(time.time())}"
         for ext in ["mp3","m4a","webm","opus","ogg","mp4"]:
             p = f"{outfile}.{ext}"
@@ -359,11 +373,13 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
         has_ffmpeg = shutil.which("ffmpeg") is not None
         is_youtube = "youtube.com" in url or "youtu.be" in url
 
-        # YouTube bo‘lsa – avval nomini tozalab, SoundCloud/Deezer qidiruvini ko‘rsat
+        # YouTube bo‘lsa – qidiruvga o‘tkazamiz
         if is_youtube:
             real_title = title
             try:
                 info_opts = {"quiet": True, "skip_download": True, "no_warnings": True}
+                if PROXY_URL:
+                    info_opts["proxy"] = PROXY_URL
                 with yt_dlp.YoutubeDL(info_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     track = info.get("track")
@@ -385,7 +401,7 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
                 await msg.edit_text("❌ Topilmadi. Qo'shiq nomini yozing.")
             return
 
-        # Deezer preview (30 soniyalik)
+        # Deezer preview
         if "dzcdn.net" in url or (url.endswith(".mp3") and "deezer.com" not in url):
             try:
                 r = requests.get(url, timeout=30, stream=True)
@@ -394,7 +410,6 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
                     for chunk in r.iter_content(8192):
                         f.write(chunk)
                 if os.path.getsize(filepath) > 1000:
-                    # Siqish (agar kerak bo‘lsa)
                     compressed = compress_audio(filepath, f"{outfile}_compressed.mp3")
                     final_path = compressed
                     add_metadata(final_path, title, "", "Deezer Preview")
@@ -424,7 +439,7 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             await msg.edit_text("❌ Yuklashda xatolik.")
             return
 
-        # SoundCloud va boshqa platformalar
+        # Asosiy yuklab olish (SoundCloud va boshqalar)
         opts = {
             "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
             "outtmpl": outfile + ".%(ext)s",
@@ -433,7 +448,8 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
         }
         if has_ffmpeg:
             opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]
-
+        if PROXY_URL:
+            opts["proxy"] = PROXY_URL
         cookies = "/app/cookies.txt"
         if os.path.exists(cookies):
             opts["cookiefile"] = cookies
@@ -455,7 +471,6 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             await msg.edit_text(f"❌ Yuklashda xatolik: {str(e)[:50]}")
             return
 
-        # Yuklangan faylni topish
         filepath = f"{outfile}.mp3"
         if not os.path.exists(filepath):
             for ext in ["m4a","webm","opus","ogg","mp4"]:
@@ -467,17 +482,13 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             await msg.edit_text("❌ Fayl topilmadi.")
             return
 
-        # Hajmni tekshirish va siqish
         size_mb = os.path.getsize(filepath) / (1024*1024)
         if size_mb > 50:
             compressed_path = f"{outfile}_compressed.mp3"
             compress_audio(filepath, compressed_path, 48)
             filepath = compressed_path
 
-        # Metadatalog qo‘shish
         add_metadata(filepath, real_title, artist, "Music Bot")
-
-        # Statistikani yangilash
         increment_top(real_title, url)
         if user_id:
             db = load_db()
@@ -506,14 +517,12 @@ async def download_audio(chat_id, url, title, context, user_id=None, user_obj=No
             except: pass
         await msg.delete()
 
-# -------------------- VIDEO YUKLASH --------------------
 async def download_video(chat_id, url, context, platform="other"):
     async with DOWNLOAD_SEMAPHORE:
         names = {"youtube":"YouTube","instagram":"Instagram","tiktok":"TikTok",
                  "snapchat":"Snapchat","pinterest":"Pinterest","likee":"Likee","other":"Video"}
         name = names.get(platform, "Video")
         msg = await context.bot.send_message(chat_id, f"🎬 {name} yuklanmoqda...")
-
         outfile = f"/tmp/video_{chat_id}_{int(time.time())}"
         for ext in ["mp4","webm","mkv","mov"]:
             p = f"{outfile}.{ext}"
@@ -527,6 +536,8 @@ async def download_video(chat_id, url, context, platform="other"):
             "quiet": True, "noplaylist": True,
             "socket_timeout": 60, "retries": 5, "no_warnings": True,
         }
+        if PROXY_URL:
+            opts["proxy"] = PROXY_URL
         if platform == "instagram":
             opts["http_headers"] = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"}
         cookies = "/app/cookies.txt"
@@ -537,8 +548,8 @@ async def download_video(chat_id, url, context, platform="other"):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 real_title = info.get("title", name)
-        except Exception:
-            await msg.edit_text(f"❌ {name} yuklashda xatolik.")
+        except Exception as e:
+            await msg.edit_text(f"❌ {name} yuklashda xatolik: {str(e)[:50]}")
             return
 
         filepath = None
@@ -564,6 +575,34 @@ async def download_video(chat_id, url, context, platform="other"):
             await msg.delete()
         else:
             await msg.edit_text("❌ Video topilmadi.")
+
+# -------------------- OVOZLI XABAR HANDLER --------------------
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ovozli xabarni qabul qilib, Shazam orqali musiqa aniqlaydi"""
+    user = update.effective_user
+    voice = update.message.voice
+    file = await context.bot.get_file(voice.file_id)
+    ogg_path = f"/tmp/voice_{user.id}.ogg"
+    await file.download_to_drive(ogg_path)
+
+    await update.message.reply_text("🎤 Ovozli xabar qabul qilindi. Musiqa aniqlanmoqda...")
+
+    # Shazam orqali aniqlash
+    result, error = await recognize_voice(ogg_path)
+    os.remove(ogg_path)
+
+    if result:
+        # Qo‘shiq nomi aniqlandi – YouTube’da qidiramiz
+        await update.message.reply_text(f"🎵 *Aniqlandi:* `{result}`\n🔍 YouTube’dan qidirilmoqda...", parse_mode="Markdown")
+        # Qidiruv natijalarini ko‘rsatish
+        results = combine_search(result, 5)
+        if results:
+            result_text, buttons = format_results(results, result)
+            await update.message.reply_text(result_text, reply_markup=InlineKeyboardMarkup(buttons))
+        else:
+            await update.message.reply_text("❌ YouTube’da bu qo‘shiq topilmadi. Iltimos, qo‘shiq nomini yozing.")
+    else:
+        await update.message.reply_text(f"❌ Musiqa aniqlanmadi. Xatolik: {error}\nIltimos, qo‘shiq nomini matn shaklida yozing.")
 
 # -------------------- TELEGRAM BOT KOMMANDALARI --------------------
 def main_keyboard():
@@ -594,15 +633,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👋 Salom, {user.first_name}!\n\n"
             "🎵 Qo'shiq nomi yoki artist ismini yozing\n"
             "🔗 YouTube, Instagram, TikTok, Snapchat linki yuboring\n"
-            "🎤 Ovozli xabar yuboring (hozircha faqat matn)\n\n"
-            "Manba: SoundCloud + YouTube Music + Deezer",
+            "🎤 Ovozli xabar yuboring – men musiqani aniqlayman!\n\n"
+            "Manba: SoundCloud + YouTube Music + Deezer + Shazam",
             reply_markup=main_keyboard()
         )
     else:
-        await update.message.reply_text(
-            "🎵 Bosh menyu\n\nQo'shiq nomi yozing yoki link yuboring!",
-            reply_markup=main_keyboard()
-        )
+        await update.message.reply_text("🎵 Bosh menyu", reply_markup=main_keyboard())
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -616,6 +652,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     platform = detect_platform(text)
     if platform:
+        # Instagram va boshqa muammoli platformalar uchun ogohlantirish
+        if platform == "instagram":
+            await update.message.reply_text(
+                "⚠️ Instagram hozirda texnik muammolar tufayli ishlamayapti.\n"
+                "Qo'shiq nomini yozib yuboring - YouTube va SoundCloud dan topib beraman."
+            )
+            return
         uid = url_to_id(text)
         icons = {"youtube":"🎬","instagram":"📸","tiktok":"🎵","snapchat":"👻","pinterest":"📌","likee":"💚","other":"🔗"}
         icon = icons.get(platform, "🔗")
@@ -648,7 +691,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = data.split("|")[1]
         url = id_to_url(uid)
         if not url:
-            await query.answer("❌ Muddati o'tgan. Qayta yuboring.", show_alert=True)
+            await query.answer("❌ Muddati o'tgan.", show_alert=True)
             return
         await query.edit_message_text("🔍 Musiqa qidirilmoqda...")
         music_title = get_media_music_title(url)
@@ -782,18 +825,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Artist yoki qo'shiq nomini yozing\n\n"
             "Link yuborish:\n"
             "YouTube, Instagram, TikTok, Snapchat, Pinterest, Likee\n\n"
-            "Har bir link uchun:\n"
-            "• To'liq musiqa — musiqa nomini qidiradi\n"
-            "• Videodagi musiqa — videodan audio chiqaradi\n"
-            "• Videoni yukla — videoni yuboradi\n\n"
+            "Ovozli xabar:\n"
+            "Musiqani ovozli xabar sifatida yuboring – Shazam orqali aniqlayman\n\n"
             "Buyruqlar:\n"
             "/start /top /favorites /history /stats /admin",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
     elif data == "back":
-        await query.edit_message_text(
-            "🎵 Bosh menyu\n\nQo'shiq nomi yozing yoki link yuboring!",
-            reply_markup=main_keyboard())
+        await query.edit_message_text("🎵 Bosh menyu", reply_markup=main_keyboard())
 
     elif data == "admin_stats":
         if user_id != ADMIN_ID: return
@@ -817,7 +856,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt += f"• {u.get('name','?')} {u.get('username','')} — {u.get('downloads',0)} ta\n"
         await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="back")]]))
 
-# -------------------- KLAVISH BUYRUG'LAR --------------------
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top = load_top()
     if not top:
@@ -898,7 +936,6 @@ async def error_handler(update, context):
 
 # -------------------- MAIN --------------------
 if __name__ == "__main__":
-    import time
     load_cache()
     app = (ApplicationBuilder().token(TOKEN)
         .read_timeout(120).write_timeout(120)
@@ -910,9 +947,10 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))          # ovozli xabar
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
-    print("🎵 MusicBot ishga tushdi!")
+    print("🎵 MusicBot ishga tushdi! (proxy + Shazam qo‘shilgan)")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
