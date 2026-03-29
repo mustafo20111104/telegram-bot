@@ -20,12 +20,12 @@ from telegram.ext import (
 )
 
 # -------------------- KONFIGURATSIYA (xavfsiz) --------------------
-TOKEN = os.environ.get("BOT_TOKEN")          # Tokenni environment'dan o‘qing!
+TOKEN = os.environ.get(""8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw")
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment o‘zgaruvchisi o‘rnatilmagan")
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 6705765282))  
-YT_API_KEY = os.environ.get "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"          
+YT_API_KEY = os.environ.get("YT_API_KEY", "AIzaSyCTHPm3oLBd-vXhl1JH9rEYOvbt1USOvzg")      
 
 # Papkalar
 DOWNLOAD_DIR = "/tmp/musicbot_downloads"     # Vaqtinchalik fayllar
