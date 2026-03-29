@@ -24,7 +24,7 @@ TOKEN = os.environ.get("BOT_TOKEN")          # Tokenni environment'dan o‘qing!
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment o‘zgaruvchisi o‘rnatilmagan")
 
-ADMIN_ID = int(os.environ.get 6705765282  
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 6705765282))  
 YT_API_KEY = os.environ.get "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"          
 
 # Papkalar
