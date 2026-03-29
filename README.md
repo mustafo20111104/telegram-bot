@@ -23,7 +23,7 @@ Telegram uchun kuchli musiqa boti. YouTube, SoundCloud, Deezer, Instagram, TikTo
 
 - Python 3.9+
 - ffmpeg (tizimda o‘rnatilgan)
-- Telegram Bot Token ([@BotFather](https://t.me/BotFather) dan oling)
+- Telegram Bot Token "8312461995:AAExjPqVRhrHvhBQVi4XALAn-cNyM5RZsYw"
 
 ### 2. Klonlash va o‘rnatish
 
